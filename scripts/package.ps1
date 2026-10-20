@@ -4,6 +4,12 @@ $out = Join-Path $root 'dist/iidxbg'
 $dll = Join-Path $root 'target/release/iidxbg.dll'
 $tool = Join-Path $root 'target/release/iidxbg-tool.exe'
 if (-not (Test-Path $dll) -or -not (Test-Path $tool)) { throw 'Build release first.' }
+$metadataJson = & cargo metadata --manifest-path "$root/Cargo.toml" --no-deps --locked --format-version 1
+if ($LASTEXITCODE -ne 0) { throw 'Cannot read package version' }
+$metadata = $metadataJson | ConvertFrom-Json
+$version = ($metadata.packages | Where-Object name -eq 'iidxbg').version
+if (-not $version) { throw 'iidxbg package version missing' }
+$archive = Join-Path $root "dist/iidxbg-$version-windows-x64.zip"
 New-Item -ItemType Directory -Force -Path "$out/images" | Out-Null
 Copy-Item -LiteralPath $dll -Destination "$out/iidxbg.dll"
 if (-not (Test-Path "$out/iidxbg.toml")) {
@@ -21,5 +27,8 @@ $packageFiles = @("$out/iidxbg.dll", "$out/iidxbg.toml", "$out/images", "$out/LI
 if (Test-Path "$out/THIRD-PARTY-NOTICES.txt") {
     $packageFiles += "$out/THIRD-PARTY-NOTICES.txt"
 }
-Compress-Archive -Path $packageFiles -DestinationPath "$root/dist/iidxbg-0.1.0-windows-x64.zip" -Force
-Write-Output "Packaged: $root/dist/iidxbg-0.1.0-windows-x64.zip"
+Compress-Archive -Path $packageFiles -DestinationPath $archive -Force
+if ($env:GITHUB_OUTPUT) {
+    "archive=$archive" | Out-File -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+}
+Write-Output "Packaged: $archive"
