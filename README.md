@@ -19,28 +19,51 @@ masked or cropped by the game.
 
 1. Download the `iidxbg-<version>-windows-x64.zip` asset from
    [GitHub Releases](https://github.com/Avimitin/iidxbg/releases) and extract it.
-   Keep `iidxbg.dll`, `iidxbg.toml` and the `images` directory together.
+   Keep `iidxbg.dll`, `iidxbg.toml` and the `iidxbg` directory together.
 2. Add `-k "D:\your\folder\iidxbg.dll"` to your existing spice64 launch command.
    Keep any other plugin arguments you already use.
 3. The default configuration uses local images. The package includes a generated
    diagnostic image so the first test needs no network. Add your own `.jpg`,
-   `.jpeg` or `.png` files to `images`; remove the diagnostic image when done.
+   `.jpeg` or `.png` files to the matching subfolder in `iidxbg` (for example, `iidxbg/results`);
+   remove its diagnostic image when done.
 4. Play a song and inspect the ordinary results screen. Check `iidxbg.log`
    alongside the DLL for attachment, image preparation and upload messages.
 
-The next image is prepared at startup and after each results exit, ahead of the
-following song's results. Late/failed downloads keep the previous image or stock
+Scene entry/exit hooks request preparation on the background worker, including
+prefetching after selection exit ahead of the song's results. Late/failed downloads keep the previous image or stock
 background. No image should change halfway through a results visit.
 
-To download images, change `source = "local"` to `source = "remote"` in
-`iidxbg.toml`. In `[remote]`, set `domain` to `"konachan.net"` (default),
+To download images, change `source = "local"` to `source = "remote"` in the desired
+`[sources.<surface>]` section of `iidxbg.toml`. In `[moebooru]`, set `domain` to `"konachan.net"` (default),
 `"konachan.com"`, or `"yande.re"`. `"mixed"` randomly chooses local or the
 selected remote site and falls back to the other source on failure.
-Set `remote.save_directory` to your download folder,
+Set `save_directory` in that surface's `[sources.<surface>.moebooru]` section to your download folder,
 for example `"D:/Pictures/IIDX/Remote"`. Relative paths are relative to the DLL,
-not the launcher's working directory. Restart the game after changing TOML.
+not the launcher's working directory. The TOML is reread
+when scene events request image preparation, so saved edits apply without restarting. Invalid edits
+keep the last valid settings, and the current results image stays fixed.
 
 [Configuration](docs/configuration.md) ·
 [Build and test](docs/development.md) ·
 [Version design](docs/architecture.md)
 
+
+## Additional backgrounds
+
+Version 0.2.0 also supports song selection, SUDDEN+, LIFT/lower cover and
+target-score graph artwork. Enable their individual switches in `[surfaces]`
+in the commented `iidxbg.toml`; they default to false. These new hooks still
+need in-game testing on both supported builds. See [surface behavior and testing](docs/background-surfaces.md).
+
+Each background can use its own folder or supported Moebooru site through
+`[sources.<surface>]` overrides. `moebooru.max_images` optionally removes oldest
+managed downloads, and `fit = "contain"` fills borders with a heavily blurred
+copy of the image. The shipped config enables overrides for all five surfaces, using separate
+local folders under `iidxbg` and download folders under `iidxbg/downloads`.
+
+
+Version 0.2.0 also supports selection-character visibility and an
+optional local replacement image through `[selection]`. See the commented
+config and [character options](docs/configuration.md#live-selection-frame-character).
+These controls reload through scene events, with no periodic file watcher.
+Any valid image dimensions are accepted. In-game validation remains pending.

@@ -13,7 +13,29 @@
     "texture_destroy": 10811952,
     "get_device": 9579088,
     "result_delete": 9513888,
-    "set_origin_pixels": 3318752
+    "set_origin_pixels": 3318752,
+    "select_update": 9273936,
+    "select_cleanup": 9273184,
+    "select_delete": 9270080,
+    "movie_draw": 9658992,
+    "cover_build": 9397072,
+    "cover_visual": 9392352,
+    "cover_delete": 9391584,
+    "graph_art": 10616048,
+    "graph_reset": 10620176,
+    "sprite_release": 3367904,
+    "sprite_manager": 3360912,
+    "sprite_create": 3362272,
+    "sprite_origin": 3368656,
+    "sprite_scale": 3370000,
+    "sprite_clip": 3369248,
+    "sprite_position": 3368320,
+    "sprite_alpha": 3369760,
+    "graph_marker": 8514032,
+    "cover_init": 9394912,
+    "graph_parent_reset": 10650784,
+    "graph_storage_release": 10613344,
+    "layer_dimensions": 3330896
   },
   "guards": [
     {
@@ -63,6 +85,94 @@
     {
       "rva": 3318752,
       "hex": "40534883ec408b99000200000f297424"
+    },
+    {
+      "rva": 9273936,
+      "hex": "48895c240848896c2410488974241848"
+    },
+    {
+      "rva": 9273184,
+      "hex": "488bc4565741564883ec6048c740b8fe"
+    },
+    {
+      "rva": 9270080,
+      "hex": "40534883ec2048896c2430488bd94889"
+    },
+    {
+      "rva": 9658992,
+      "hex": "4883ec4880791000743080792400742a"
+    },
+    {
+      "rva": 9397072,
+      "hex": "4885d20f84df01000048895c24184889"
+    },
+    {
+      "rva": 9392352,
+      "hex": "4053574883ec580f29742440488bf90f"
+    },
+    {
+      "rva": 9391584,
+      "hex": "48895c2408574883ec20488bd933ff48"
+    },
+    {
+      "rva": 10616048,
+      "hex": "4c8bdc574883ec70488b05b961630048"
+    },
+    {
+      "rva": 10620176,
+      "hex": "40574883ec3048c7442420feffffff48"
+    },
+    {
+      "rva": 3367904,
+      "hex": "40574883ec508b5108488bf985d20f84"
+    },
+    {
+      "rva": 3360912,
+      "hex": "488d0599ebad0bc3cccccccccccccccc"
+    },
+    {
+      "rva": 3362272,
+      "hex": "48896c24104889742418574883ec2041"
+    },
+    {
+      "rva": 3368656,
+      "hex": "40534883ec20660f6ec2488bd98b8910"
+    },
+    {
+      "rva": 3370000,
+      "hex": "48895c2410574883ec408b9910020000"
+    },
+    {
+      "rva": 3369248,
+      "hex": "4883ec38488b01448b520c448b4a0844"
+    },
+    {
+      "rva": 3368320,
+      "hex": "4883ec288b4908660f6ec2488d542430"
+    },
+    {
+      "rva": 3369760,
+      "hex": "8b49080f28c3f30f105c24280f28e2f3"
+    },
+    {
+      "rva": 8514032,
+      "hex": "4885c974094885d20f85a2e7b0ff33c0"
+    },
+    {
+      "rva": 9394912,
+      "hex": "48895c241048896c2418488974242057"
+    },
+    {
+      "rva": 10650784,
+      "hex": "488bc45541564157488da878fbffff48"
+    },
+    {
+      "rva": 10613344,
+      "hex": "40574883ec20488b01488bf9488b0848"
+    },
+    {
+      "rva": 3330896,
+      "hex": "4885d2743b48895c2408574883ec6049"
     }
   ],
   "tables": [
@@ -88,5 +198,17 @@
     "scene_background": 264,
     "background_archive": 272,
     "background_movie": 296
+  },
+  "surface_data": {
+    "afp_group_get": 13003768,
+    "afp_group_set": 13003760,
+    "select_vtable": 13968648,
+    "selection_fade": 0,
+    "select_update_extended": 0,
+    "select_frame_chara": 280,
+    "layer_vtable": 14248112,
+    "afp_property_get": 13003816,
+    "afp_property_set": 13003792,
+    "select_frame_priority": 188
   }
 }

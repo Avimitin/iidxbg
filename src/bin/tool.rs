@@ -1,4 +1,8 @@
-use iidxbg::{config::Config, pixels, profile, source::Provider};
+use iidxbg::{
+    config::{Config, Surface},
+    pixels, profile,
+    source::Provider,
+};
 use std::path::Path;
 
 fn main() {
@@ -17,7 +21,7 @@ fn run() -> iidxbg::Result<()> {
         }
         Some("prepare") if args.len() == 4 => {
             let config = Config::load(Path::new(&args[2]))?;
-            let image = Provider::new(config)?.prepare()?;
+            let image = Provider::new(config.for_surface(Surface::Results))?.prepare()?;
             pixels::write_preview(&image, Path::new(&args[3]))?;
             println!(
                 "Prepared {} ({}x{}) -> {}",

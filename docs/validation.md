@@ -136,3 +136,280 @@ formatting, release build and DLL load/SDK-refusal smoke test passed.
 DLL and repository-default configuration, with licenses and diagnostic image.
 Local DLL SHA-256:
 `3edf8f866864a4508c6da501575721f9a66fd99aa9a9dfd9652098995729fed8`.
+
+Master and annotated tag `0.1.1` were pushed at commit
+`a263204fb241fe28158c93e5e01ae8b73d76d554`.
+[GitHub workflow 39463334770](https://github.com/Avimitin/iidxbg/actions/runs/39463334770)
+completed successfully and published
+[`iidxbg-0.1.1-windows-x64.zip`](https://github.com/Avimitin/iidxbg/releases/tag/0.1.1).
+The downloaded GitHub asset is 2,066,044 bytes, SHA-256
+`d9903d0411d8dbe22f019b025d1a9bb5e0944567dedee1f95ef5df30175297ae`.
+Its configuration matches the tagged repository default byte-for-byte and includes
+the Yande.re domain. The package contains the DLL, TOML, diagnostic image and
+two license/notice files.
+
+## Additional surfaces investigation - 2026-10-21
+
+The read-only `scripts/verify-surfaces.py` passed against both exact DLLs.
+It reproduces hash/PE identity, native scene/sprite vtables, lane table stride,
+cover clipping, call/tail-jump paths and the supplied 34 selection helper stubs.
+Evidence and unresolved runtime questions are in
+[background surfaces](background-surfaces.md) and its two build-specific records.
+Raw local decompilation snapshots are retained in ignored
+`analysis/surfaces-evidence-20261021.json`; no game binary/assets are committed.
+
+This investigation changes documentation and an offline verifier only.
+No new hooks were added to the runtime or the 0.1.1 tag, and no in-game testing
+of selection, SUDDEN+, LIFT or target-graph replacements was performed.
+
+## Live configuration reload - 2026-10-21 (unreleased)
+
+The worker now rereads TOML before every preparation attempt, including retries,
+and atomically replaces the provider snapshot/client after validation. Read,
+parse, validation and client-construction errors retain the previous snapshot.
+Disabled decisions are delivered through the same pending/visit boundary as
+images; lifecycle hooks remain installed for later re-enabling. Native fault
+and shutdown flags remain separate from configuration.
+
+- All 15 tests passed. The new provider test edits an actual temporary TOML and
+  switches between two local PNG folders and output sizes without recreating
+  the provider. It checks updated domain, timeout, tags and save path; retained
+  repeat history; malformed/invalid/missing config fallback; disable/re-enable.
+- Visit-state tests verify disabled decisions cannot change an active image,
+  clear the next visit's prior image, and allow later re-enabling.
+- Formatting, Clippy with warnings denied, optimized build and the Windows
+  DLL load/SDK-refusal smoke test passed. No in-game test was performed.
+
+Local build: `target/release/iidxbg.dll`, SHA-256
+`e114a79b758cb106701cafd2cfaebbcb5fc232073429e229803357b5bfe67bae`.
+Local package: `dist/iidxbg-live-config-windows-x64.zip`, SHA-256
+`3d80c031a78434d2315a48a475a4d51c01d9fba5cf62eb6722367b2ee75c59a8`.
+Every ZIP entry was compared against the built DLL, repository default TOML,
+fresh diagnostic image and license/notice files. The published 0.1.1 tag and
+asset were not changed; this local package contains subsequent development work.
+
+## Four optional surfaces ? 2026-10-21 (unreleased)
+
+Implemented selection, SUDDEN+, lower HIDDEN/LIFT and target-score graph
+adapters for both fingerprinted builds. Options default off in `[surfaces]`.
+The existing results and live-reload changes are retained. The provider worker
+prepares all crops; each active component freezes its image/config decision.
+
+- All 17 Rust tests passed, including existing-configuration compatibility,
+  independent surface opt-ins, invalid-option rejection and BGRA crop/contain
+  derivatives without source mutation.
+- Formatting and Clippy with warnings denied passed; optimized Windows x64
+  DLL and tool built successfully.
+- Static surface verifier passed for both game files, including all 33 runtime
+  entry guards, scene/sprite vtables, call anchors and AFP group IAT ordinals.
+- DLL export/SDK refusal smoke test passed.
+- Six private-mapping attachment checks passed: native, supported existing
+  MinHook chain and altered-tail rejection for each of IIDX 33 and 34. All
+  13 new inline hooks install in successful cases; rejected cases leave every
+  surface entry and results vtable unchanged. These checks use
+  DONT_RESOLVE_DLL_REFERENCES and execute no game/graphics callbacks.
+- Package entries were compared byte-for-byte with the built DLL, repository
+  default TOML, diagnostic image and license notices. MinHook's bundled C
+  library license is included alongside its Rust wrapper license.
+
+No real-game validation of these four surfaces has been performed. In-game
+crop/origin, fades, repeated transitions, device reset, static/animated choices,
+1P/2P/DP/arena/battle layouts and actual plugin coexistence remain to be tested.
+The prior IIDX 33 results-screen user confirmation does not cover these changes.
+
+Outputs (no release tag changed):
+
+- `dist/iidxbg.dll`: SHA-256 `22c526dff4fbf9998cb45f3de4d3f575ee00ec40127a0daca1be12eb28e40878`
+- `dist/iidxbg.toml`: repository default with all four commented switches
+- `dist/iidxbg-surfaces-dev-windows-x64.zip`: SHA-256 `522a500dc6349469fb64ba93c98235532d469e0219c2e85048608cd2a2219a24`
+
+## Independent sources, retention and blurred contain ? 2026-10-21 (unreleased)
+
+The canonical section is now `[moebooru]`, including nested per-surface overrides.
+Legacy API-section names and the legacy source-mode alias are rejected, as an
+explicitly requested breaking configuration change. Five worker-owned providers
+have independent sources, repeat histories and output canvases. Configuration
+reloads before each surface query; invalid reloads retain the last valid bank.
+Query completions publish immediately and failures retain that surface's pixels.
+
+Download retention is opt-in (`max_images = 0` by default). It removes oldest
+managed regular files by modification time in the configured save directory,
+nonrecursively, and leaves unrelated files alone. No user image directory was
+pruned during this work; deletion tests used isolated generated temporary files.
+The contain renderer produces a sharp centered foreground over a blurred,
+stretched backdrop, computed entirely on the worker.
+
+Validation:
+
+- All 21 tests passed. New coverage includes independent folders and pixel
+  identities for all five surfaces, atomic config rejection, failure isolation,
+  independent overrides/inheritance, removal of old section/source names,
+  zero/exact/over-limit cleanup and oldest-first ordering across both cache
+  namespaces while preserving unrelated files and nested data.
+- Contain tests verify sharp foreground pixels, softened nonblack margins,
+  channel order and source immutability. An optimized CLI preview was visually
+  inspected at `target/contain-preview/preview.png` (ignored development output).
+- Formatting, Clippy with warnings denied, optimized DLL/tool build and SDK/load
+  smoke test passed. Hook attachment passed on private mappings of both exact
+  IIDX builds; no game callbacks were executed by those tests.
+- Every development ZIP entry matches its source file. The bundled TOML has
+  `[moebooru]`, all commented per-surface examples and `max_images = 0`.
+
+No native addresses/ABIs changed. Actual in-game rendering and device-reset
+validation remain pending; no new real-game test or remote download was claimed.
+
+Current outputs:
+
+- `dist/iidxbg.dll`: SHA-256 `d06773ae2f3fc4271b0acc5475706a003dd48a8e89118dffe34b4b548549a809`
+- `dist/iidxbg.toml`: updated canonical config and all option comments
+- `dist/iidxbg-surfaces-dev-windows-x64.zip`: SHA-256 `e9c2493365edc70cb4d8f773beacd870de8d5be36ac76ab7729dd4ad4403e513`
+
+## Default image directories (2026-10-21)
+
+Changed the shipped local folder to `iidxbg` and download folder to
+`iidxbg/downloads`, relative to the TOML file. Updated per-surface examples,
+installation instructions, path tests and package image layout. Existing
+custom paths remain configurable; default recursion remains disabled.
+
+All 21 tests, Clippy with warnings denied and the optimized release build passed.
+The development ZIP was checked entry-by-entry against its source files and
+contains `iidxbg/test-card.png` plus the updated config. No in-game testing was
+performed for this configuration/package change.
+
+- `dist/iidxbg.dll`: SHA-256 `eccba9881753db74ebdf3dded2aebc37b24864fb0c2b54ab2a55bf895e9a4e23`
+- `dist/iidxbg-surfaces-dev-windows-x64.zip`: SHA-256 `09d3344331bde8395f1453b11f03b482c5aaac184adcaaad99eec245fe68b93c`
+
+## Active default surface overrides (2026-10-21)
+
+The shipped TOML now enables all five source override sections, each using
+local mode, cover fit and separate local/download folders under `iidxbg` and
+`iidxbg/downloads`. API domain/tags/retention inherit global settings unless
+overridden. Additional surface enable switches remain separate and opt-in.
+The package supplies a generated test card in each configured local folder.
+
+All 21 tests, Clippy with warnings denied and the release build passed.
+Existing config tests now check every resolved default folder. The ZIP was
+verified against source files and all ten source/API sections were checked.
+No native code changed and no in-game testing was performed.
+
+- `dist/iidxbg.dll`: SHA-256 `f3d8b2d771f837d528e774b51f653b6afa9789d53321efada92d53bbd244ca7e`
+- `dist/iidxbg-surfaces-dev-windows-x64.zip`: SHA-256 `1f2c920a7d2ae19b76cac54204159d875d6c721e4b6e5ba9c8c532b29f06f24b`
+
+## Default contain fit (2026-10-21)
+
+The global image fit and all five active surface overrides now default to
+`contain`, preserving the sharp foreground with blurred background fill.
+All 21 tests, Clippy with warnings denied and release build passed. Updated
+`dist/iidxbg.toml` and the development ZIP; verified all six fit settings and
+archive entries against their source files. The release DLL is unchanged.
+No in-game testing was performed.
+
+- Development ZIP SHA-256: `e07ed272931d5cd6a77decbb347544797ea6d9e64a0576fc0f43bc30a4f9d812`
+
+## Center-crop defaults for narrow surfaces (2026-10-21)
+
+SUDDEN+, LIFT and target graph now default to `cover`, using the existing
+aspect-preserving resize-to-fill and center-crop renderer. Global, results and
+song-selection defaults remain `contain`. Every surface still accepts either
+mode, including contain for manually cropped local images. No renderer or
+native code changed. Updated config comments and configuration documentation.
+
+All 21 tests, Clippy with warnings denied and release build passed. Refreshed
+the dist config and development ZIP; verified the fit settings per surface and
+archive bytes against source files. The release DLL is unchanged. No in-game
+testing was performed.
+
+- Development ZIP SHA-256: `647e388df95f117675e082f39c5389c3592a4d6054f346df249bd8621e8d3cfd`
+
+## Installed IIDX33 check (2026-10-21)
+
+Read-only inspection of `\\2dx.lan.sh1mar.in\IIDX33\modules`:
+
+- Installed DLL SHA-256: `d06773ae2f3fc4271b0acc5475706a003dd48a8e89118dffe34b4b548549a809`, matching the recorded independent-source/blur/retention build. Current local rebuild: `f3d8b2d771f837d528e774b51f653b6afa9789d53321efada92d53bbd244ca7e`. Subsequent recorded changes concern defaults, packaging, docs and tests; hashes are not identical.
+- Installed TOML SHA-256: `cb1d7c1f1d0813cddae14cf212803a2e6c7da3a8c505be29618e14ed96b5a5bc`. Parsed using `pip._vendor.tomli`; manually checked against the current config fields.
+- All five surfaces enabled, remote mode inherited from the root, domain `konachan.net`, tags `rating:safe`, shared `iidxbg/downloads`, retention disabled (`max_images = 0`). Results/selection inherit contain; SUDDEN+/LIFT/graph explicitly select cover. Local directory `iidxbg` and download directory exist; 40 download files present at inspection.
+- Existing game log records loading and SDK registration of iidxbg; plugin log records exact IIDX33 attachment, per-surface preparation and result/selection/cover/graph upload readiness. Earlier duplicate-key reload rejections are followed by a successful configuration reload.
+- Config last-write time 02:45:29 is later than plugin log last-write time 02:43:54 on October 21. These logs do not prove that the latest saved config has been consumed. Recheck for a subsequent successful reload/preparation after the next query.
+
+No installed files were modified. Inspection of existing logs is not direct visual validation of rendering or evidence that the latest config was applied.
+
+
+## Live selection frame character (2026-10-21)
+
+Implemented live native visibility and optional local static image replacement
+for the exact IIDX33/34 profiles. A separate 500 ms worker watches config and
+image metadata independently of HTTP preparation. Transparent PNG alpha is
+preserved on a 1920x1080 canvas. New build-specific evidence is in
+[iidx33-frame-chara.md](iidx33-frame-chara.md) and
+[iidx34-frame-chara.md](iidx34-frame-chara.md).
+
+All 26 Rust tests passed, including live config edits/invalid-edit retention,
+image reload/clear/alpha, mask restoration/retired-owner rejection and mocked
+native geometry/color calls. Formatting, Clippy with warnings denied and the
+optimized release build passed. `verify-frame-chara.py` passed both exact DLLs,
+including native visibility/dimension emulation with mocked AFP imports.
+The built DLL passed LoadLibrary/export/SDK smoke checks and private-process
+native attachment for both builds. These do not execute the game; no in-game
+visual, transition or reset validation was performed for this feature.
+
+Cleaned dist by moving its old contents to `target/dist-before-frame-chara`
+and publishing fresh DLL, repository-default TOML, licenses and five generated
+test cards. The development ZIP contains exactly those nine files and each
+entry was compared byte-for-byte with the clean dist source. Installed game
+files were not modified.
+
+- `dist/iidxbg.dll`: SHA-256 `cc250ff76331d55c8a47b1db00254c4742ee6210a31b4b7e4ef536c5db6bef8e`.
+
+- `dist/iidxbg-surfaces-dev-windows-x64.zip`: SHA-256 `2b94f41f7b17a993fe501005bad3ae358a4abfd3b8b49913bb0841702faab530`.
+
+
+## Scene-driven reload revision (2026-10-21)
+
+Removed the separate 500 ms file watcher. Selection/result entry and exit and
+cover/graph retirement increment the shared request generation and wake the
+single image worker. Config reload and character file checks happen when it
+handles that request, or an existing deferred/retry request. One accepted
+snapshot governs a preparation batch. There is no idle filesystem polling;
+the worker parks between notifications, with timeout only for pending work.
+Background success/failure backoff and active-visit freezing remain intact.
+Selection exit is used as a lifecycle trigger, not claimed to be a verified
+song-confirmation hook. Original native callbacks still run and no new native
+address or detour was introduced.
+
+Corrected image guidance: 1920x1080 is the internal AFP movie canvas, while the
+inspected IIDX33 character artwork is 700x800 (702x802 padded texture). Input
+files of other valid dimensions were already accepted. Whole-layer replacement
+still does not reconstruct the internal stock child-art placement.
+
+All 26 tests passed, including request-driven config acceptance/invalid-edit
+retention and file reload checks. Fixed the omitted-section test to remove the
+parsed TOML table instead of splitting at a token that can occur in comments.
+Clippy with warnings denied passed. No game execution or visual validation.
+
+Optimized release build, formatting, DLL loading/SDK smoke and private native
+attachment for both exact builds passed. Refreshed dist DLL/TOML and verified
+all nine ZIP entries byte-for-byte. No installed game files were changed.
+
+- `dist/iidxbg.dll` SHA-256: `09d5e9165c10937b3c2598907eea682be1a817b26c809994d771e700ecb3c651`.
+
+- `dist/iidxbg-surfaces-dev-windows-x64.zip` SHA-256: `90758d1251ef63b2dc3878e0a47638b1fc467713fc5dfc5f6f409d7455fe748b`.
+
+
+## Version 0.2.0 release preparation (2026-10-21)
+
+Bumped Cargo manifest/lockfile to 0.2.0 and updated current user documentation
+for this release. Included independent surface sources, Moebooru configuration,
+download retention, contain blur/crop defaults, selection/cover/graph adapters,
+and scene-driven frame-character controls with build-specific evidence.
+All 26 tests and Clippy with warnings denied passed. Binary analysis inputs,
+tokens, local images and dist artifacts remain ignored and are not committed.
+The tag workflow builds the release ZIP from repository defaults. New native
+surfaces/character behavior still lack real-game validation on either build.
+
+Release build, formatting, DLL loading and private-process attachment checks
+for both exact builds passed. Refreshed dist DLL/default TOML and generated
+`iidxbg-0.2.0-windows-x64.zip`; verified all nine entries byte-for-byte.
+
+- `dist/iidxbg.dll` SHA-256: `6e4fb3f571267c2167565ad291cbe91216792b978c1d440ac9061359103c3050`.
+
+- `dist/iidxbg-0.2.0-windows-x64.zip` SHA-256: `034813bc1f769fa2f64d057db6248ceff962de954b8243174979715392b60d84`.

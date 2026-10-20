@@ -9,6 +9,7 @@ pub struct Profile {
     pub sha256: String,
     pub image_size: usize,
     pub layout: Layout,
+    pub surface_data: BTreeMap<String, usize>,
     pub rvas: BTreeMap<String, usize>,
     pub guards: Vec<Guard>,
     pub tables: Vec<Table>,

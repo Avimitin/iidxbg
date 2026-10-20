@@ -23,7 +23,11 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
         files.update(p for p in directory.glob(pattern) if p.is_file())
     if package.get("license_file"):
         files.add(directory / package["license_file"])
+    if package["name"] == "minhook":
+        # The Rust wrapper's MIT license does not cover its bundled C library.
+        files.add(directory / "minhook" / "LICENSE.txt")
     for path in sorted(files):
-        output.append(f"\n--- {path.name} ---\n{path.read_text(encoding='utf-8', errors='replace')}\n")
+        output.append(f"\n--- {path.relative_to(directory)} ---\n"
+                      f"{path.read_text(encoding='utf-8', errors='replace')}\n")
 (root / "THIRD-PARTY-NOTICES.txt").write_text("\n".join(output), encoding="utf-8")
 print(f"Notices generated for {len(metadata['packages']) - 1} dependencies.")

@@ -2,7 +2,7 @@ use crate::{
     Error, Result,
     config::{Fit, Image},
 };
-use image::{DynamicImage, ImageFormat, ImageReader, Rgba, RgbaImage, imageops};
+use image::{DynamicImage, ImageFormat, ImageReader, RgbaImage, imageops};
 use std::io::{Cursor, Read};
 
 #[derive(Debug)]
@@ -23,6 +23,23 @@ pub fn read_bounded(reader: impl Read, max: u64) -> Result<Vec<u8>> {
 }
 
 pub fn decode(bytes: &[u8], config: &Image, label: String) -> Result<Prepared> {
+    decode_with_canvas(bytes, config, label, false)
+}
+
+/// A character cutout keeps alpha and uses transparent padding, never blurred fill.
+pub fn decode_character(bytes: &[u8], config: &Image, label: String) -> Result<Prepared> {
+    let mut config = config.clone();
+    config.width = 1920;
+    config.height = 1080;
+    decode_with_canvas(bytes, &config, label, true)
+}
+
+fn decode_with_canvas(
+    bytes: &[u8],
+    config: &Image,
+    label: String,
+    character: bool,
+) -> Result<Prepared> {
     let format = image::guess_format(bytes)?;
     if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
         return Err(Error::Format);
@@ -39,24 +56,25 @@ pub fn decode(bytes: &[u8], config: &Image, label: String) -> Result<Prepared> {
     limits.max_alloc = Some(384 * 1024 * 1024);
     reader.limits(limits);
     let source = reader.decode()?;
-    let resized = match config.fit {
-        Fit::Cover => {
-            source.resize_to_fill(config.width, config.height, imageops::FilterType::Triangle)
-        }
-        Fit::Contain => source.resize(config.width, config.height, imageops::FilterType::Triangle),
-    }
-    .into_rgba8();
-    let mut canvas = RgbaImage::from_pixel(config.width, config.height, Rgba([0, 0, 0, 255]));
-    imageops::overlay(
-        &mut canvas,
-        &resized,
-        i64::from((config.width - resized.width()) / 2),
-        i64::from((config.height - resized.height()) / 2),
-    );
+    let canvas = if character {
+        let foreground = source.resize(config.width, config.height, imageops::FilterType::Triangle);
+        let mut canvas = RgbaImage::new(config.width, config.height);
+        imageops::overlay(
+            &mut canvas,
+            &foreground,
+            i64::from((config.width - foreground.width()) / 2),
+            i64::from((config.height - foreground.height()) / 2),
+        );
+        canvas
+    } else {
+        fit_canvas(&source, config.width, config.height, config.fit)
+    };
     let mut bgra = canvas.into_raw();
     for p in bgra.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
-        p[3] = 255;
+        if !character {
+            p[3] = 255;
+        }
     }
     Ok(Prepared {
         label,
@@ -64,6 +82,57 @@ pub fn decode(bytes: &[u8], config: &Image, label: String) -> Result<Prepared> {
         height: config.height,
         bgra,
     })
+}
+
+/// Worker-only derivative; channel order does not affect the resize filter.
+pub fn resize(prepared: &Prepared, width: u32, height: u32, fit: Fit) -> Result<Prepared> {
+    let source = RgbaImage::from_raw(prepared.width, prepared.height, prepared.bgra.clone())
+        .ok_or(Error::Limit)?;
+    let source = DynamicImage::ImageRgba8(source);
+    let canvas = fit_canvas(&source, width, height, fit);
+    Ok(Prepared {
+        label: prepared.label.clone(),
+        width,
+        height,
+        bgra: canvas.into_raw(),
+    })
+}
+
+// Blur a small stretched copy, then upscale it. This bounds blur cost even on a
+// 4K output canvas. Only the backdrop is blurred; the centered foreground is sharp.
+fn fit_canvas(source: &DynamicImage, width: u32, height: u32, fit: Fit) -> RgbaImage {
+    if fit == Fit::Cover {
+        return source
+            .resize_to_fill(width, height, imageops::FilterType::Triangle)
+            .into_rgba8();
+    }
+    let foreground = source
+        .resize(width, height, imageops::FilterType::Triangle)
+        .into_rgba8();
+    let mut canvas = if foreground.width() == width && foreground.height() == height {
+        return foreground;
+    } else {
+        source
+            .resize_exact(
+                width.min(256),
+                height.min(256),
+                imageops::FilterType::Triangle,
+            )
+            .blur(16.0)
+            .resize_exact(width, height, imageops::FilterType::Triangle)
+            .into_rgba8()
+    };
+    // PNG transparency must not leave transparent borders in the final texture.
+    for pixel in canvas.pixels_mut() {
+        pixel[3] = 255;
+    }
+    imageops::overlay(
+        &mut canvas,
+        &foreground,
+        i64::from((width - foreground.width()) / 2),
+        i64::from((height - foreground.height()) / 2),
+    );
+    canvas
 }
 
 pub fn write_preview(prepared: &Prepared, path: &std::path::Path) -> Result<()> {
@@ -79,6 +148,46 @@ pub fn write_preview(prepared: &Prepared, path: &std::path::Path) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::Rgba;
+    #[test]
+    fn contain_blurs_only_the_margin_and_keeps_foreground_sharp() {
+        let source = RgbaImage::from_fn(64, 32, |x, _| {
+            if x % 2 == 0 {
+                Rgba([255, 0, 0, 255])
+            } else {
+                Rgba([0, 0, 255, 255])
+            }
+        });
+        let canvas = fit_canvas(
+            &DynamicImage::ImageRgba8(source.clone()),
+            64,
+            64,
+            Fit::Contain,
+        );
+        for x in 0..64 {
+            assert_eq!(canvas.get_pixel(x, 16), source.get_pixel(x, 0));
+        }
+        let margin = canvas.get_pixel(32, 0);
+        assert!(margin[0] > 30 && margin[0] < 225);
+        assert!(margin[2] > 30 && margin[2] < 225);
+        assert_eq!(margin[3], 255);
+    }
+    #[test]
+    fn surface_derivatives_preserve_bgra_and_fit_without_mutating_source() {
+        let source = Prepared {
+            label: "source".into(),
+            width: 4,
+            height: 2,
+            bgra: [17, 45, 200, 255].repeat(8),
+        };
+        let cover = resize(&source, 2, 4, Fit::Cover).unwrap();
+        assert_eq!(cover.bgra, [17, 45, 200, 255].repeat(8));
+        let contain = resize(&source, 2, 4, Fit::Contain).unwrap();
+        assert_eq!(&contain.bgra[..8], &[17, 45, 200, 255].repeat(2));
+        assert_eq!(&contain.bgra[8..16], &[17, 45, 200, 255].repeat(2));
+        assert_eq!(source.bgra, [17, 45, 200, 255].repeat(8));
+        assert_eq!(cover.label, source.label);
+    }
 
     #[test]
     fn bounded_read_and_decode_limits() {
@@ -94,7 +203,7 @@ mod tests {
             max_source_pixels: 32,
         };
         let out = decode(bytes.get_ref(), &cfg, "fixture".into()).unwrap();
-        assert_eq!(&out.bgra[..4], &[0, 0, 0, 255]);
+        assert_eq!(&out.bgra[..4], &[0, 0, 255, 255]);
         assert_eq!(&out.bgra[16..20], &[0, 0, 255, 255]);
         cfg.fit = Fit::Cover;
         let out = decode(bytes.get_ref(), &cfg, "fixture".into()).unwrap();

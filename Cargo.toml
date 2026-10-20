@@ -1,9 +1,9 @@
 [package]
 name = "iidxbg"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
-description = "Experimental IIDX 33/34 results illustration plugin for spice2x"
+description = "Experimental IIDX 33/34 artwork plugin for spice2x"
 
 [lib]
 name = "iidxbg"
@@ -25,6 +25,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
+minhook = "0.9.0"
 windows = { version = "0.62", features = ["Win32_Graphics_Direct3D9"] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Memory",

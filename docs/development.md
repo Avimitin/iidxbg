@@ -21,7 +21,7 @@ Outputs:
 
 ```powershell
 target/release/iidxbg-tool.exe verify 'C:\path\bm2dx.dll'
-target/release/iidxbg-tool.exe test-image images/test-card.png
+target/release/iidxbg-tool.exe test-image iidxbg/test-card.png
 target/release/iidxbg-tool.exe prepare iidxbg.toml preview.png
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
 ```
@@ -49,6 +49,13 @@ CI does not include game binaries; these checks run locally.
 guarded pixel-origin helper with mocked AFP imports (`pefile`/`unicorn` required).
 It verifies float argument passing, linked clip traversal and property writes.
 
+The additional [background-surface investigation](background-surfaces.md)
+covers song selection, SUDDEN+, LIFT and the gameplay target graph.
+`python scripts/verify-surfaces.py path/to/bm2dx.dll` reproduces its static
+anchors using `pefile` and `capstone`. These checks now cover the optional runtime surface hooks. Build-specific evidence is recorded for
+[33 / 20260812](iidx33-background-surfaces.md) and
+[34 / 20260917](iidx34-background-surfaces.md).
+
 `scripts/package.ps1` copies the built DLL, repository-default commented TOML, licenses,
 and diagnostic image into `dist/iidxbg`, then produces a ZIP. It preserves an
 existing dist configuration. Delete or move dist yourself if you want a pristine
@@ -69,3 +76,11 @@ and generated diagnostic image; no game binaries, local downloads or tokens
 are required. Build permissions are read-only; only the release job can write
 repository contents. Actions use the same pinned commits as bilimani.
 
+
+`python scripts/verify-frame-chara.py path/to/bm2dx.dll` checks exact identity,
+scene/frame/root offsets, character construction, AFP property imports and the
+guarded dimension helper. Unicorn runs the native visibility getter/setter and
+dimension wrapper with mocked AFP imports. Requires pefile, capstone and unicorn;
+this does not execute the game or validate rendering. Rust tests additionally
+exercise owner retirement/restoration, geometry arguments, transparent image
+reload and scene-request config acceptance without HTTP/game calls.

@@ -1,7 +1,13 @@
 //! Shared verified ABI; native addresses/layouts come from exact-build profiles.
+mod surfaces;
 use crate::{
-    Error, Result, config::Config, hook_chain, pixels::Prepared, profile, source::Provider,
-    state::Selection,
+    Error, Result,
+    config::{Config, Surface},
+    hook_chain,
+    pixels::Prepared,
+    profile,
+    source::Providers,
+    state::{Pending, Selection},
 };
 use std::{
     ffi::c_void,
@@ -41,7 +47,9 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static READY: AtomicBool = AtomicBool::new(false);
 static OWNER: AtomicU32 = AtomicU32::new(0);
 static REQUEST: AtomicU64 = AtomicU64::new(1);
-static PENDING: Mutex<Option<Arc<Prepared>>> = Mutex::new(None);
+static WORKER: OnceLock<thread::Thread> = OnceLock::new();
+static HIDE_FRAME_CHARA: AtomicBool = AtomicBool::new(false);
+static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 static GPU: Mutex<Graphics> = Mutex::new(Graphics::new());
 static NATIVE: OnceLock<Native> = OnceLock::new();
 static EVENTS: OnceLock<SyncSender<Event>> = OnceLock::new();
@@ -68,11 +76,24 @@ enum Event {
     Stock,
     Fault(&'static str),
     Invalidated,
+    Surface(&'static str),
+}
+
+fn wake_worker() {
+    if let Some(worker) = WORKER.get() {
+        worker.unpark();
+    }
+}
+
+fn request_images() {
+    REQUEST.fetch_add(1, Ordering::AcqRel);
+    wake_worker();
 }
 
 fn event(value: Event) {
     if let Some(tx) = EVENTS.get() {
         let _ = tx.try_send(value);
+        wake_worker();
     }
 }
 
@@ -242,6 +263,7 @@ impl Graphics {
         if !self.selection.active {
             let pending = PENDING.try_lock().ok().and_then(|mut p| p.take());
             self.selection.enter(pending);
+            request_images();
             self.background = background;
             self.attempted = false;
             self.layout_reported = false;
@@ -377,7 +399,7 @@ fn retire_scene(n: &Native, this: usize) {
             }
             state.background = 0;
             state.selection.leave();
-            REQUEST.fetch_add(1, Ordering::AcqRel);
+            request_images();
         }
     });
 }
@@ -618,6 +640,7 @@ fn attach(root: &Path) -> Result<()> {
             return Err(e);
         }
     }
+    surfaces::attach(n)?;
     ENABLED.store(!STOP.load(Ordering::Acquire), Ordering::Release);
     Ok(())
 }
@@ -633,25 +656,29 @@ fn log(root: &Path, text: &str) {
 }
 
 fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
+    let _ = WORKER.set(thread::current());
     unsafe {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     }
     let run = || -> Result<()> {
-        let config = Config::load(&root.join("iidxbg.toml"))?;
-        if !config.enabled {
-            log(&root, "Disabled in configuration");
-            return Ok(());
-        }
-        let mut provider = Provider::new(config)?;
+        let config_path = root.join("iidxbg.toml");
+        let config = Config::load(&config_path)?;
+        HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
+        let mut character = crate::character::LocalImage::default();
+        let mut providers = Providers::new(config)?;
+        let mut images: [Option<Arc<Prepared>>; 5] = Default::default();
+        // Keep lifecycle hooks active even while configured off, so subsequent
+        // visits can request a reload and re-enable without reinstalling hooks.
         attach(&root)?;
         log(
             &root,
             &format!(
-                "Attached {}. Waiting for results. Live validation pending.",
+                "Attached {}. Results and optional surface hooks installed; new surfaces await in-game validation.",
                 NATIVE.get().unwrap().profile.label
             ),
         );
         let mut completed = 0;
+        let mut configured = 0;
         let mut next_attempt = Instant::now();
         while !STOP.load(Ordering::Acquire) {
             for message in rx.try_iter().take(64) {
@@ -664,42 +691,101 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                         &root,
                         &format!("Texture ready: {width}x{height}; upload {upload_us} us"),
                     ),
-                    Event::Stock => log(
-                        &root,
-                        "No prepared image at results entry; stock this visit",
-                    ),
+                    Event::Stock => log(&root, "Using stock artwork this results visit"),
                     Event::Centered { x, y } => log(
                         &root,
                         &format!("Custom illustration origin set to ({x}, {y}) texture pixels"),
                     ),
                     Event::Fault(text) => log(&root, text),
                     Event::Invalidated => log(&root, "Graphics resources invalidated"),
+                    Event::Surface(name) => log(&root, &format!("Custom {name} artwork ready")),
                 }
             }
             let generation = REQUEST.load(Ordering::Acquire);
+            let new_event = generation != configured;
+            if new_event {
+                reload_request(&root, &config_path, &mut providers, &mut character);
+                configured = generation;
+            }
             if generation != completed && Instant::now() >= next_attempt {
-                match provider.prepare() {
-                    Ok(image) => {
-                        log(&root, &format!("Prepared {}", image.label));
-                        if generation == REQUEST.load(Ordering::Acquire)
-                            && !STOP.load(Ordering::Acquire)
-                        {
-                            *PENDING.lock().unwrap_or_else(|e| e.into_inner()) =
-                                Some(Arc::new(image));
-                            completed = generation;
-                        }
-                        next_attempt = Instant::now() + Duration::from_secs(30);
+                if !new_event {
+                    // A failed/deferred image request gets a fresh snapshot on retry.
+                    reload_request(&root, &config_path, &mut providers, &mut character);
+                }
+                let mut failed = false;
+                for surface in Surface::ALL {
+                    if STOP.load(Ordering::Acquire) {
+                        break;
                     }
-                    Err(e) => {
-                        log(
+                    // One accepted config snapshot governs this preparation batch.
+                    // Maintenance failures do not discard a usable image or cause a redownload.
+                    let cleanup = |providers: &Providers| match providers.cleanup(surface) {
+                        Ok(0) => {}
+                        Ok(count) => log(
                             &root,
-                            &format!("Image preparation failed: {e}; retry in 60 seconds"),
-                        );
-                        next_attempt = Instant::now() + Duration::from_secs(60);
+                            &format!(
+                                "{}: removed {count} oldest managed downloads",
+                                surface.name()
+                            ),
+                        ),
+                        Err(e) => log(
+                            &root,
+                            &format!("{}: download cleanup failed: {e}", surface.name()),
+                        ),
+                    };
+                    cleanup(&providers);
+                    match providers.prepare(surface) {
+                        Ok(image) => {
+                            if let Some(image) = &image {
+                                log(
+                                    &root,
+                                    &format!("Prepared {}: {}", surface.name(), image.label),
+                                );
+                            }
+                            images[surface.index()] = image.map(Arc::new);
+                        }
+                        Err(e) => {
+                            failed = true;
+                            log(
+                                &root,
+                                &format!(
+                                    "{} preparation failed: {e}; retaining its previous image, retry in 60 seconds",
+                                    surface.name()
+                                ),
+                            );
+                        }
+                    }
+                    cleanup(&providers);
+                    // Publish each completed query so a local result does not wait
+                    // behind downloads for other surfaces. Active visits stay frozen.
+                    for item in Surface::ALL {
+                        if !providers.enabled(item) {
+                            images[item.index()] = None;
+                        }
+                    }
+                    if generation == REQUEST.load(Ordering::Acquire)
+                        && !STOP.load(Ordering::Acquire)
+                    {
+                        let pending = images[0]
+                            .as_ref()
+                            .map(|p| Pending::Image(p.clone()))
+                            .unwrap_or(Pending::Disabled);
+                        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(pending);
+                        surfaces::publish(&images);
                     }
                 }
+                if !failed && generation == REQUEST.load(Ordering::Acquire) {
+                    completed = generation;
+                }
+                next_attempt = Instant::now() + Duration::from_secs(if failed { 60 } else { 30 });
             }
-            thread::sleep(Duration::from_millis(100));
+            // Sleep until a hook/log/shutdown wakes us. Only an outstanding
+            // preparation request schedules a timeout; there is no file watcher.
+            if REQUEST.load(Ordering::Acquire) != completed {
+                thread::park_timeout(next_attempt.saturating_duration_since(Instant::now()));
+            } else {
+                thread::park();
+            }
         }
         Ok(())
     };
@@ -713,6 +799,40 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
             ENABLED.store(false, Ordering::Release);
             log(&root, "Worker panic; feature disabled");
         }
+    }
+}
+
+/// Called only for a scene request or its deferred/retry preparation.
+fn reload_request(
+    root: &Path,
+    path: &Path,
+    providers: &mut Providers,
+    character: &mut crate::character::LocalImage,
+) {
+    match providers.reload(path) {
+        Ok(true) => log(root, "Configuration reloaded for scene image request"),
+        Ok(false) => {}
+        Err(e) => log(
+            root,
+            &format!("Configuration reload rejected: {e}; keeping last valid settings"),
+        ),
+    }
+    let config = providers.config();
+    HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
+    match character.refresh(config, root) {
+        Ok(crate::character::Update::Unchanged) => {}
+        Ok(crate::character::Update::Native) => surfaces::publish_character(None),
+        Ok(crate::character::Update::Image(prepared)) => {
+            log(
+                root,
+                &format!("Prepared selection frame character: {}", prepared.label),
+            );
+            surfaces::publish_character(Some(Arc::new(prepared)));
+        }
+        Err(e) => log(
+            root,
+            &format!("Frame character image rejected: {e}; retaining previous artwork"),
+        ),
     }
 }
 
@@ -739,6 +859,7 @@ extern "C" fn graphics(event_id: u32, _: *const Frame, _: *mut c_void) {
                     unsafe {
                         state.invalidate(n);
                     }
+                    surfaces::invalidate();
                     // A device can be destroyed/recreated during a result visit.
                     // Keep the CPU selection frozen; scene cleanup/destruction,
                     // not the graphics device, owns the visit boundary.
@@ -755,6 +876,7 @@ extern "C" fn graphics(event_id: u32, _: *const Frame, _: *mut c_void) {
 extern "C" fn shutdown() {
     ENABLED.store(false, Ordering::Release);
     STOP.store(true, Ordering::Release);
+    wake_worker();
     // SDK has already sent DESTROY and stopped rendering. DLL is pinned:
     // vtable callbacks remain valid and simply call their original functions.
 }
@@ -832,4 +954,40 @@ pub unsafe extern "system" fn DllMain(module: *mut c_void, reason: u32, _: *mut 
         STOP.store(true, Ordering::Release);
     }
     1
+}
+
+#[cfg(test)]
+mod selection_reload_tests {
+    use super::*;
+
+    #[test]
+    fn scene_request_reloads_character_settings_and_retains_invalid_edits() {
+        let root = std::env::temp_dir().join(format!("iidxbg-event-{:016x}", fastrand::u64(..)));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("iidxbg.toml");
+        let text = include_str!("../iidxbg.toml");
+        std::fs::write(&path, text).unwrap();
+        let mut providers = Providers::new(Config::load(&path).unwrap()).unwrap();
+        let mut character = crate::character::LocalImage::default();
+        reload_request(&root, &path, &mut providers, &mut character);
+        assert!(!HIDE_FRAME_CHARA.load(Ordering::Acquire));
+        let hidden = text.replace("frame_chara = true", "frame_chara = false");
+        std::fs::write(&path, &hidden).unwrap();
+        // Saving alone has no effect; the next hook request consumes the edit.
+        assert!(!HIDE_FRAME_CHARA.load(Ordering::Acquire));
+        reload_request(&root, &path, &mut providers, &mut character);
+        assert!(HIDE_FRAME_CHARA.load(Ordering::Acquire));
+        std::fs::write(&path, "enabled = [").unwrap();
+        reload_request(&root, &path, &mut providers, &mut character);
+        assert!(HIDE_FRAME_CHARA.load(Ordering::Acquire));
+        std::fs::write(&path, hidden.replace("enabled = true", "enabled = false")).unwrap();
+        reload_request(&root, &path, &mut providers, &mut character);
+        assert!(!HIDE_FRAME_CHARA.load(Ordering::Acquire));
+        std::fs::write(&path, text).unwrap();
+        reload_request(&root, &path, &mut providers, &mut character);
+        assert!(!HIDE_FRAME_CHARA.load(Ordering::Acquire));
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(root.join("iidxbg.log")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 }

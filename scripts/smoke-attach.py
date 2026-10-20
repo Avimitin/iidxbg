@@ -121,6 +121,14 @@ if rejected:
 for table in profile["tables"]:
     value = ctypes.c_void_p.from_address(game + table["rva"] + table["slot"] * 8).value
     assert (value == game + table["target"]) == rejected, "Unexpected vtable mutation"
+for name in ("select_update", "select_cleanup", "select_delete", "movie_draw",
+             "cover_init", "cover_build", "cover_visual", "cover_delete",
+             "graph_art", "graph_reset", "graph_parent_reset",
+             "graph_storage_release", "sprite_release"):
+    rva = profile["rvas"][name]
+    guard = next(g for g in profile["guards"] if g["rva"] == rva)
+    unchanged = ctypes.string_at(game + rva, 16).hex() == guard["hex"]
+    assert unchanged == rejected, f"Unexpected surface hook state: {name}"
 assert shutdown
 shutdown()
 time.sleep(0.2)

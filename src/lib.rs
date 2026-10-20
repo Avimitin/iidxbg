@@ -1,3 +1,4 @@
+pub mod character;
 pub mod config;
 pub mod hook_chain;
 pub mod pixels;
@@ -5,7 +6,7 @@ pub mod profile;
 pub mod source;
 pub mod state;
 
-#[cfg(all(windows, target_arch = "x86_64", not(test)))]
+#[cfg(all(windows, target_arch = "x86_64"))]
 mod runtime;
 
 #[derive(Debug, thiserror::Error)]
