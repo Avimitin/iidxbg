@@ -7,7 +7,8 @@
 enabled = true
 
 # "local": random image from local_directory.
-# "konachan": download an image matching konachan.tags.
+# "remote": download from remote.domain using remote.tags.
+# "konachan" is also accepted for existing configurations.
 # "mixed": randomly choose a source; try the other source if it fails.
 source = "local"
 
@@ -18,13 +19,19 @@ local_directory = 'images'
 # Symlinks and junctions are skipped.
 recursive = false
 
-[konachan]
+[remote]
+# API domain candidates (use the domain name without https://):
+#   "konachan.net" - default; also used when this setting is omitted.
+#   "konachan.com" - alternative Konachan API.
+#   "yande.re" - Yande.re API.
+domain = "konachan.net"
+
 # Space-separated search tags. Example: "rating:safe landscape".
 tags = "rating:safe"
 
 # Save successfully decoded downloads here. Files remain until you delete them.
 # To randomly reuse downloads offline, also set local_directory to this folder.
-save_directory = 'downloads/konachan'
+save_directory = 'downloads/remote'
 
 # Choose a random API page from 1 through this number, then shuffle its posts.
 # Range: 1–100. An empty page falls back to page 1.

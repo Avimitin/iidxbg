@@ -1,6 +1,6 @@
 use crate::{
     Error, Result,
-    config::{Config, Source},
+    config::{Config, RemoteDomain, Source},
     pixels::{self, Prepared},
 };
 use reqwest::{Url, blocking::Client, redirect::Policy};
@@ -24,17 +24,12 @@ struct Post {
     file_url: String,
 }
 
-pub fn allowed_url(url: &Url) -> bool {
+pub fn allowed_url(domain: RemoteDomain, url: &Url) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
         && url.password().is_none()
         && url.port_or_known_default() == Some(443)
-        && url.host_str().is_some_and(|h| {
-            h == "konachan.net"
-                || h == "konachan.com"
-                || h.ends_with(".konachan.net")
-                || h.ends_with(".konachan.com")
-        })
+        && url.host_str().is_some_and(|h| domain.allows_host(h))
 }
 
 pub struct Provider {
@@ -45,13 +40,18 @@ pub struct Provider {
 
 impl Provider {
     pub fn new(config: Config) -> Result<Self> {
+        let domain = config.remote.domain;
         let client = Client::builder()
-            .user_agent("iidxbg/0.1 (results-background plugin)")
-            .timeout(Duration::from_secs(config.konachan.timeout_seconds))
+            .user_agent(concat!(
+                "iidxbg/",
+                env!("CARGO_PKG_VERSION"),
+                " (results-background plugin)"
+            ))
+            .timeout(Duration::from_secs(config.remote.timeout_seconds))
             .connect_timeout(Duration::from_secs(5))
             .https_only(true)
-            .redirect(Policy::custom(|attempt| {
-                if attempt.previous().len() >= 3 || !allowed_url(attempt.url()) {
+            .redirect(Policy::custom(move |attempt| {
+                if attempt.previous().len() >= 3 || !allowed_url(domain, attempt.url()) {
                     attempt.error("unsupported redirect")
                 } else {
                     attempt.follow()
@@ -68,7 +68,7 @@ impl Provider {
     pub fn prepare(&mut self) -> Result<Prepared> {
         let result = match self.config.source {
             Source::Local => self.local(),
-            Source::Konachan => self.remote(),
+            Source::Remote => self.remote(),
             Source::Mixed if fastrand::bool() => self.remote().or_else(|_| self.local()),
             Source::Mixed => self.local().or_else(|_| self.remote()),
         }?;
@@ -105,13 +105,15 @@ impl Provider {
     }
 
     fn remote(&self) -> Result<Prepared> {
-        let page = fastrand::u32(1..=self.config.konachan.page_max);
+        let page = fastrand::u32(1..=self.config.remote.page_max);
         let mut posts = self.posts(page)?;
         if posts.is_empty() && page != 1 {
             posts = self.posts(1)?;
         }
         fastrand::shuffle(&mut posts);
-        posts.sort_by_key(|p| self.previous.as_deref() == Some(&format!("konachan:{}", p.id)));
+        posts.sort_by_key(|p| {
+            self.previous.as_deref() == Some(&self.config.remote.domain.post_label(p.id))
+        });
         let mut last_error = Error::NoImages;
         for post in posts.into_iter().take(3) {
             match self.fetch_post(&post) {
@@ -125,11 +127,11 @@ impl Provider {
     fn posts(&self, page: u32) -> Result<Vec<Post>> {
         let response = self
             .client
-            .get("https://konachan.net/post.json")
+            .get(self.config.remote.domain.posts_url())
             .query(&[
                 ("limit", "100"),
                 ("page", &page.to_string()),
-                ("tags", self.config.konachan.tags.as_str()),
+                ("tags", self.config.remote.tags.as_str()),
             ])
             .send()?
             .error_for_status()?;
@@ -143,7 +145,7 @@ impl Provider {
             .find(|s| !s.is_empty())
             .ok_or(Error::NoImages)?;
         let url = Url::parse(text).map_err(|_| Error::Url)?;
-        if !allowed_url(&url) {
+        if !allowed_url(self.config.remote.domain, &url) {
             return Err(Error::Url);
         }
         let response = self.client.get(url).send()?.error_for_status()?;
@@ -154,15 +156,25 @@ impl Provider {
             return Err(Error::Limit);
         }
         let bytes = pixels::read_bounded(response, self.config.byte_limit())?;
-        let prepared = pixels::decode(&bytes, &self.config.image, format!("konachan:{}", post.id))?;
+        let prepared = pixels::decode(
+            &bytes,
+            &self.config.image,
+            self.config.remote.domain.post_label(post.id),
+        )?;
         let extension = match image::guess_format(&bytes)? {
             image::ImageFormat::Png => "png",
             image::ImageFormat::Jpeg => "jpg",
             _ => return Err(Error::Format),
         };
         let hash = hex::encode(Sha256::digest(&bytes));
-        let name = format!("{}-{}.{}", post.id, &hash[..20], extension);
-        save(&self.config.konachan.save_directory, &name, &bytes)?;
+        let name = format!(
+            "{}-{}-{}.{}",
+            self.config.remote.domain.namespace(),
+            post.id,
+            &hash[..20],
+            extension
+        );
+        save(&self.config.remote.save_directory, &name, &bytes)?;
         Ok(prepared)
     }
 }
@@ -236,8 +248,28 @@ mod tests {
         for url in [
             "https://konachan.net/sample/a.jpg",
             "https://cdn.konachan.net/a.png",
+            "https://konachan.com/sample/a.jpg",
+            "https://cdn.konachan.com/a.png",
         ] {
-            assert!(allowed_url(&Url::parse(url).unwrap()));
+            for domain in [RemoteDomain::Net, RemoteDomain::Com] {
+                assert!(allowed_url(domain, &Url::parse(url).unwrap()));
+            }
+            assert!(!allowed_url(
+                RemoteDomain::Yandere,
+                &Url::parse(url).unwrap()
+            ));
+        }
+        for url in [
+            "https://yande.re/image/a.jpg",
+            "https://files.yande.re/a.png",
+        ] {
+            assert!(allowed_url(
+                RemoteDomain::Yandere,
+                &Url::parse(url).unwrap()
+            ));
+            for domain in [RemoteDomain::Net, RemoteDomain::Com] {
+                assert!(!allowed_url(domain, &Url::parse(url).unwrap()));
+            }
         }
         for url in [
             "http://konachan.net/a",
@@ -245,9 +277,36 @@ mod tests {
             "https://localhost/a",
             "https://user@konachan.net/a",
             "https://konachan.net:444/a",
+            "http://konachan.com/a",
+            "https://konachan.com.evil.invalid/a",
+            "https://user@konachan.com/a",
+            "https://konachan.com:444/a",
+            "http://yande.re/a",
+            "https://yande.re.evil.invalid/a",
+            "https://evilyande.re/a",
+            "https://user@yande.re/a",
+            "https://yande.re:444/a",
         ] {
-            assert!(!allowed_url(&Url::parse(url).unwrap()));
+            for domain in [RemoteDomain::Net, RemoteDomain::Com, RemoteDomain::Yandere] {
+                assert!(!allowed_url(domain, &Url::parse(url).unwrap()));
+            }
         }
+    }
+
+    #[test]
+    fn provider_ids_do_not_collide() {
+        assert_eq!(
+            RemoteDomain::Net.post_label(42),
+            RemoteDomain::Com.post_label(42)
+        );
+        assert_ne!(
+            RemoteDomain::Net.post_label(42),
+            RemoteDomain::Yandere.post_label(42)
+        );
+        assert_ne!(
+            RemoteDomain::Net.namespace(),
+            RemoteDomain::Yandere.namespace()
+        );
     }
 
     #[test]

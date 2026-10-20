@@ -69,3 +69,70 @@ the automated checks above were performed locally.
 IIDX 34 remains offline-validated only. Broader result-mode coverage, repeated
 scene lifecycle and device-reset testing, and frame-time measurements remain
 outstanding.
+
+## Konachan domain selection - 2026-10-21
+
+Added optional `konachan.domain`: `konachan.net` (also the default when omitted)
+or `konachan.com`. Both sites document the same listing API at
+<https://konachan.net/help/api> and <https://konachan.com/help/api>.
+The existing post parser and download pipeline are shared.
+
+- Twelve unit tests passed, including domain selection, omitted-field
+  compatibility, invalid-domain rejection and both image-host boundaries.
+- Formatting, Clippy with warnings denied, release build and Windows DLL
+  load/SDK-refusal smoke test passed.
+- The release CLI prepared a 1920x1080 image through the `.com` API with
+  `rating:safe id:409820`, page 1. Downloads and preview remain under ignored
+  `target/konachan-com-check/`; no installation configuration was changed.
+- No additional in-game test was performed for this provider-only change.
+
+Related provider check: Yande.re's `/help/api` and
+`/post.json?limit=1&tags=rating%3Asafe` returned HTTP 200. The listing contains
+`id`, `sample_url`, `jpeg_url` and `file_url`, matching the fields used here.
+This initially established listing compatibility only; the implementation and
+download check follow below.
+
+## Yande.re provider - 2026-10-21
+
+The shared remote provider now supports `konachan.net`, `konachan.com` and
+`yande.re`. The default configuration lists these candidates in comments under
+`[remote]`. Existing `[konachan]` and `source = "konachan"` configurations remain
+accepted; omitted domains still select `konachan.net`.
+
+The domain selects both API endpoint and permitted image/redirect hosts.
+Yande.re permits `yande.re` and its subdomains, including the observed
+`files.yande.re`; Konachan permits its two domain families. Labels and saved
+filenames distinguish `konachan` and `yandere` post IDs.
+
+- Thirteen unit tests passed, including all three domains, existing config
+  aliases, duplicate-section rejection, cross-provider host rejection and
+  separate post labels. Formatting and Clippy with warnings denied passed.
+- Release build and Windows DLL load/SDK-refusal smoke test passed.
+- Live Yande.re listing with `rating:safe landscape` returned post `1270356`
+  with a sample on `files.yande.re`. A separate test configuration using
+  `rating:safe id:1270356`, page 1, successfully prepared a 1920x1080 preview
+  through the release CLI. The saved JPEG is 175,509 bytes, with SHA-256
+  prefix `7261785b544396268729`. Test files stay in ignored
+  `target/yandere-check/` and are not redistributed.
+- The same release CLI also prepared Konachan `.com` post `409820` using the
+  previous `[konachan]` configuration, exercising compatibility through actual
+  listing, download, decode and save.
+
+Reproduce with `target/release/iidxbg-tool.exe prepare <test.toml> <preview.png>`,
+using a separate copy of the shipped TOML with `source = "remote"`, the selected
+domain, tags and page limit above. Remote availability may change.
+
+DLL SHA-256:
+`d3afb78a291eedbd9a59cecf94fd00ad298d9b26a8de3ad7db58da9c643120ae`.
+No additional in-game validation was performed; native rendering code did not
+change.
+
+## Release 0.1.1 - 2026-10-21
+
+Package and lockfile version are `0.1.1`; the HTTP User-Agent now derives its
+version from package metadata. Thirteen tests, Clippy with warnings denied,
+formatting, release build and DLL load/SDK-refusal smoke test passed.
+`dist/iidxbg-0.1.1-windows-x64.zip` was verified byte-for-byte against the built
+DLL and repository-default configuration, with licenses and diagnostic image.
+Local DLL SHA-256:
+`3edf8f866864a4508c6da501575721f9a66fd99aa9a9dfd9652098995729fed8`.

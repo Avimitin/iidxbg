@@ -1,9 +1,9 @@
 # iidxbg
 
 An experimental `iidxbg.dll` plugin for spice2x that replaces the **per-song
-results illustration** with a random local image or an image from Konachan.
+results illustration** with a random local image or an image from Konachan or Yande.re.
 It prepares images in the background and keeps one image fixed for each results
-visit. Konachan images are saved in your configured folder.
+visit. Downloaded images are saved in your configured folder.
 
 One DLL supports the inspected **IIDX 33 / 20260812** and
 **IIDX 34 / 20260917** x64 builds, selected automatically by exact SHA-256.
@@ -32,10 +32,12 @@ The next image is prepared at startup and after each results exit, ahead of the
 following song's results. Late/failed downloads keep the previous image or stock
 background. No image should change halfway through a results visit.
 
-To use Konachan, change `source = "local"` to `source = "konachan"` in
-`iidxbg.toml`. `"mixed"` randomly chooses local or Konachan and falls back to the
-other source on failure. Set `konachan.save_directory` to your download folder,
-for example `"D:/Pictures/IIDX/Konachan"`. Relative paths are relative to the DLL,
+To download images, change `source = "local"` to `source = "remote"` in
+`iidxbg.toml`. In `[remote]`, set `domain` to `"konachan.net"` (default),
+`"konachan.com"`, or `"yande.re"`. `"mixed"` randomly chooses local or the
+selected remote site and falls back to the other source on failure.
+Set `remote.save_directory` to your download folder,
+for example `"D:/Pictures/IIDX/Remote"`. Relative paths are relative to the DLL,
 not the launcher's working directory. Restart the game after changing TOML.
 
 [Configuration](docs/configuration.md) ·

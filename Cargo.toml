@@ -1,6 +1,6 @@
 [package]
 name = "iidxbg"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 description = "Experimental IIDX 33/34 results illustration plugin for spice2x"

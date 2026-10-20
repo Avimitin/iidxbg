@@ -28,7 +28,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
 
 `prepare` exercises the same provider, body limits, decoder, resize and download
 save path used by the plugin. It writes a preview without calling game functions.
-Run with a separate configuration to test Konachan without changing installation
+Run with a separate configuration to test Konachan or Yande.re without changing installation
 settings. `test-image` generates original diagnostic artwork; no game or provider
 image is redistributed in the package.
 

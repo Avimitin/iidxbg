@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 #[serde(rename_all = "snake_case")]
 pub enum Source {
     Local,
-    Konachan,
+    #[serde(alias = "konachan")]
+    Remote,
     Mixed,
 }
 
@@ -24,17 +25,65 @@ pub struct Config {
     pub source: Source,
     pub local_directory: PathBuf,
     pub recursive: bool,
-    pub konachan: Konachan,
+    #[serde(alias = "konachan")]
+    pub remote: Remote,
     pub image: Image,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Konachan {
+pub struct Remote {
+    #[serde(default)]
+    pub domain: RemoteDomain,
     pub tags: String,
     pub save_directory: PathBuf,
     pub page_max: u32,
     pub timeout_seconds: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub enum RemoteDomain {
+    #[default]
+    #[serde(rename = "konachan.net")]
+    Net,
+    #[serde(rename = "konachan.com")]
+    Com,
+    #[serde(rename = "yande.re")]
+    Yandere,
+}
+
+impl RemoteDomain {
+    pub fn posts_url(self) -> &'static str {
+        match self {
+            Self::Net => "https://konachan.net/post.json",
+            Self::Com => "https://konachan.com/post.json",
+            Self::Yandere => "https://yande.re/post.json",
+        }
+    }
+
+    pub fn namespace(self) -> &'static str {
+        match self {
+            Self::Net | Self::Com => "konachan",
+            Self::Yandere => "yandere",
+        }
+    }
+
+    pub fn post_label(self, id: u64) -> String {
+        format!("{}:{id}", self.namespace())
+    }
+
+    pub fn allows_host(self, host: &str) -> bool {
+        let domains: &[&str] = match self {
+            Self::Net | Self::Com => &["konachan.net", "konachan.com"],
+            Self::Yandere => &["yande.re"],
+        };
+        domains.iter().any(|domain| {
+            host == *domain
+                || host
+                    .strip_suffix(domain)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -55,8 +104,8 @@ impl Config {
         if value.local_directory.is_relative() {
             value.local_directory = root.join(&value.local_directory);
         }
-        if value.konachan.save_directory.is_relative() {
-            value.konachan.save_directory = root.join(&value.konachan.save_directory);
+        if value.remote.save_directory.is_relative() {
+            value.remote.save_directory = root.join(&value.remote.save_directory);
         }
         Ok(value)
     }
@@ -69,11 +118,11 @@ impl Config {
         {
             return Err(Error::Config("image dimensions/limits out of range"));
         }
-        if !(1..=100).contains(&self.konachan.page_max)
-            || !(3..=60).contains(&self.konachan.timeout_seconds)
-            || self.konachan.tags.len() > 1000
+        if !(1..=100).contains(&self.remote.page_max)
+            || !(3..=60).contains(&self.remote.timeout_seconds)
+            || self.remote.tags.len() > 1000
             || self.local_directory.as_os_str().is_empty()
-            || self.konachan.save_directory.as_os_str().is_empty()
+            || self.remote.save_directory.as_os_str().is_empty()
         {
             return Err(Error::Config("invalid source settings"));
         }
@@ -88,6 +137,49 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_domain_selection_and_existing_config() {
+        let shipped = include_str!("../iidxbg.toml");
+        for (domain, endpoint) in [
+            ("konachan.net", "https://konachan.net/post.json"),
+            ("konachan.com", "https://konachan.com/post.json"),
+            ("yande.re", "https://yande.re/post.json"),
+        ] {
+            let c: Config = toml::from_str(&shipped.replace(
+                "domain = \"konachan.net\"",
+                &format!("domain = \"{domain}\""),
+            ))
+            .unwrap();
+            c.validate().unwrap();
+            assert_eq!(c.remote.domain.posts_url(), endpoint);
+        }
+        let old = shipped.replace("domain = \"konachan.net\"", "");
+        let c: Config = toml::from_str(&old).unwrap();
+        assert_eq!(c.remote.domain, RemoteDomain::Net);
+        let legacy = old
+            .replace("[remote]", "[konachan]")
+            .replace("source = \"local\"", "source = \"konachan\"");
+        let c: Config = toml::from_str(&legacy).unwrap();
+        c.validate().unwrap();
+        assert_eq!(c.source, Source::Remote);
+        assert_eq!(c.remote.domain, RemoteDomain::Net);
+        assert!(toml::from_str::<Config>(&format!("{shipped}\n[konachan]\n")).is_err());
+        for invalid in [
+            "example.com",
+            "https://konachan.com",
+            "konachan.com.evil.invalid",
+            "yande.re.evil.invalid",
+        ] {
+            assert!(
+                toml::from_str::<Config>(&shipped.replace(
+                    "domain = \"konachan.net\"",
+                    &format!("domain = \"{invalid}\"")
+                ))
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn shipped_config_and_strict_limits() {
@@ -132,8 +224,8 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("images")
         );
         assert_eq!(
-            c.konachan.save_directory,
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("downloads/konachan")
+            c.remote.save_directory,
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("downloads/remote")
         );
     }
 }
