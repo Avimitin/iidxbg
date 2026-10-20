@@ -17,8 +17,9 @@ masked or cropped by the game.
 
 ## Install and try
 
-1. Use the files in `dist/iidxbg/`: keep `iidxbg.dll`, `iidxbg.toml` and the
-   `images` directory together.
+1. Download the `iidxbg-<version>-windows-x64.zip` asset from
+   [GitHub Releases](https://github.com/Avimitin/iidxbg/releases) and extract it.
+   Keep `iidxbg.dll`, `iidxbg.toml` and the `images` directory together.
 2. Add `-k "D:\your\folder\iidxbg.dll"` to your existing spice64 launch command.
    Keep any other plugin arguments you already use.
 3. The default configuration uses local images. The package includes a generated
