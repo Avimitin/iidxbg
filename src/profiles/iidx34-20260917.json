@@ -1,0 +1,87 @@
+{
+  "sha256": "3755587f44785effe5008f74cfe7dccbdf423ad09feead48e00a90f78a42fe83",
+  "image_size": 207613952,
+  "rvas": {
+    "background_update": 9465456,
+    "result_cleanup": 9524608,
+    "find_clip": 8514032,
+    "set_archive": 3317552,
+    "set_texture": 3317328,
+    "set_visible": 3318208,
+    "set_origin": 3318880,
+    "texture_wrap": 10811552,
+    "texture_destroy": 10811952,
+    "get_device": 9579088,
+    "result_delete": 9513888
+  },
+  "guards": [
+    {
+      "rva": 9465456,
+      "hex": "488bc4554154415541564157488da8c8"
+    },
+    {
+      "rva": 9524608,
+      "hex": "4055535657415441564157488d6c24d9"
+    },
+    {
+      "rva": 8514032,
+      "hex": "4885c974094885d20f85a2e7b0ff33c0"
+    },
+    {
+      "rva": 3317552,
+      "hex": "48895c240848896c2410488974241848"
+    },
+    {
+      "rva": 3317328,
+      "hex": "48895c24084889742410574883ec308b"
+    },
+    {
+      "rva": 3318208,
+      "hex": "40534883ec208b990002000085db784b"
+    },
+    {
+      "rva": 3318880,
+      "hex": "488bc4534883ec60488968f0418bd848"
+    },
+    {
+      "rva": 10811552,
+      "hex": "48894c24085355565741564883ec7048"
+    },
+    {
+      "rva": 10811952,
+      "hex": "40534883ec5048c7442420feffffff48"
+    },
+    {
+      "rva": 9579088,
+      "hex": "488b050909bc0a488b80e0000000c3cc"
+    },
+    {
+      "rva": 9513888,
+      "hex": "48895c2408574883ec208bda488bf9e8"
+    }
+  ],
+  "tables": [
+    {
+      "rva": 14091672,
+      "slot": 2,
+      "target": 9465456
+    },
+    {
+      "rva": 14100816,
+      "slot": 17,
+      "target": 9524608
+    },
+    {
+      "rva": 14100816,
+      "slot": 7,
+      "target": 9513888
+    }
+  ],
+  "label": "IIDX 34 / 20260917",
+  "layout": {
+    "scene_vtable": 14100816,
+    "scene_background": 264,
+    "background_archive": 272,
+    "background_movie": 296
+  }
+}

@@ -1,0 +1,51 @@
+# iidxbg — save this UTF-8 file beside iidxbg.dll.
+# Read once at startup; restart the game after editing.
+# Relative paths start from this file's folder. Use single quotes for Windows
+# paths, for example 'D:\Pictures\IIDX', so backslashes need no escaping.
+
+# false disables image preparation and game hooks.
+enabled = true
+
+# "local": random image from local_directory.
+# "konachan": download an image matching konachan.tags.
+# "mixed": randomly choose a source; try the other source if it fails.
+source = "local"
+
+# PNG/JPEG folder. Rescanned for each preparation; new images need no restart.
+local_directory = 'images'
+
+# Search subfolders too (up to 8 levels / 10,000 candidates).
+# Symlinks and junctions are skipped.
+recursive = false
+
+[konachan]
+# Space-separated search tags. Example: "rating:safe landscape".
+tags = "rating:safe"
+
+# Save successfully decoded downloads here. Files remain until you delete them.
+# To randomly reuse downloads offline, also set local_directory to this folder.
+save_directory = 'downloads/konachan'
+
+# Choose a random API page from 1 through this number, then shuffle its posts.
+# Range: 1–100. An empty page falls back to page 1.
+page_max = 5
+
+# Timeout for each HTTP request, in seconds. Range: 3–60.
+# Failed preparation retries after 60 seconds.
+timeout_seconds = 20
+
+[image]
+# Output texture canvas. Width: 64–3840; height: 64–2160.
+# Keep these defaults for the initial in-game crop/placement test.
+width = 1920
+height = 1080
+
+# "cover": fill canvas and crop edges.
+# "contain": show the whole image, adding black margins as needed.
+fit = "cover"
+
+# Maximum encoded file size for BOTH local files and downloads, in MiB (1–64).
+max_download_mb = 24
+
+# Maximum decoded source width × height, before resize (1–64,000,000 pixels).
+max_source_pixels = 40000000

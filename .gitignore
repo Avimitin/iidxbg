@@ -1,0 +1,8 @@
+/target/
+/dist/
+/images/*
+!/images/.gitkeep
+/downloads/
+*.log
+/analysis/
+

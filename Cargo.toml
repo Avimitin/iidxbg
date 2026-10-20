@@ -1,0 +1,38 @@
+[package]
+name = "iidxbg"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Experimental IIDX 33/34 results illustration plugin for spice2x"
+
+[lib]
+name = "iidxbg"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "iidxbg-tool"
+path = "src/bin/tool.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+thiserror = "2"
+sha2 = "0.10"
+hex = "0.4"
+fastrand = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D9"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Memory",
+  "Win32_System_Threading", "Win32_System_Diagnostics_Debug",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+

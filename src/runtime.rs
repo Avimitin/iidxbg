@@ -1,0 +1,657 @@
+//! Shared verified ABI; native addresses/layouts come from exact-build profiles.
+use crate::{
+    Error, Result, config::Config, pixels::Prepared, profile, source::Provider, state::Selection,
+};
+use std::{
+    ffi::c_void,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, MutexGuard, OnceLock, TryLockError,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, SyncSender},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+use windows::{Win32::Graphics::Direct3D9::*, core::Interface};
+use windows_sys::Win32::System::{
+    LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
+        GetModuleHandleExW, GetModuleHandleW,
+    },
+    Memory::{PAGE_READWRITE, VirtualProtect},
+    Threading::{
+        GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    },
+};
+
+static MODULE: AtomicUsize = AtomicUsize::new(0);
+static STARTED: AtomicBool = AtomicBool::new(false);
+static STOP: AtomicBool = AtomicBool::new(false);
+static ENABLED: AtomicBool = AtomicBool::new(false);
+static READY: AtomicBool = AtomicBool::new(false);
+static OWNER: AtomicU32 = AtomicU32::new(0);
+static REQUEST: AtomicU64 = AtomicU64::new(1);
+static PENDING: Mutex<Option<Arc<Prepared>>> = Mutex::new(None);
+static GPU: Mutex<Graphics> = Mutex::new(Graphics::new());
+static NATIVE: OnceLock<Native> = OnceLock::new();
+static EVENTS: OnceLock<SyncSender<Event>> = OnceLock::new();
+
+fn graphics_state() -> Option<MutexGuard<'static, Graphics>> {
+    match GPU.try_lock() {
+        Ok(state) => Some(state),
+        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+#[derive(Debug)]
+enum Event {
+    Applied {
+        width: u32,
+        height: u32,
+        upload_us: u128,
+    },
+    Stock,
+    Fault(&'static str),
+    Invalidated,
+}
+
+fn event(value: Event) {
+    if let Some(tx) = EVENTS.get() {
+        let _ = tx.try_send(value);
+    }
+}
+
+struct Native {
+    base: usize,
+    profile: profile::Profile,
+}
+
+impl Native {
+    /// Only concrete function-pointer types whose ABI is documented may be used.
+    unsafe fn function<T: Copy>(&self, name: &str) -> T {
+        assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<usize>());
+        let address = self.base + self.profile.rvas[name];
+        unsafe { std::mem::transmute_copy(&address) }
+    }
+}
+
+type Background = unsafe extern "system" fn(usize, u32) -> usize;
+type Cleanup = unsafe extern "system" fn(usize) -> usize;
+type SceneDelete = unsafe extern "system" fn(usize, u8) -> usize;
+type FindClip = unsafe extern "system" fn(usize, *const u8) -> usize;
+type SetArchive = unsafe extern "system" fn(usize, usize, *const u8) -> u8;
+type SetTexture = unsafe extern "system" fn(usize, *const u8) -> u8;
+type Visible = unsafe extern "system" fn(usize, u8);
+type Origin = unsafe extern "system" fn(usize, i32, i32) -> usize;
+type Wrap = unsafe extern "system" fn(*mut u64, *mut c_void) -> usize;
+type Destroy = unsafe extern "system" fn(*mut u64) -> usize;
+type Device = unsafe extern "system" fn() -> *mut c_void;
+
+unsafe fn field(object: usize, offset: usize) -> usize {
+    unsafe { ((object + offset) as *const usize).read() }
+}
+
+struct Texture {
+    // Stable 8-byte-aligned storage. Native constructor initializes all 64 bytes.
+    wrapper: Box<[u64; 8]>,
+}
+
+impl Texture {
+    unsafe fn upload(native: &Native, image: &Prepared) -> Result<Self> {
+        let get_device: Device = unsafe { native.function("get_device") };
+        let raw = unsafe { get_device() };
+        let device = unsafe { IDirect3DDevice9::from_raw_borrowed(&raw) }
+            .ok_or(Error::Native("no D3D9 device"))?;
+        let mut texture = None;
+        unsafe {
+            device.CreateTexture(
+                image.width,
+                image.height,
+                1,
+                D3DUSAGE_DYNAMIC as u32,
+                D3DFMT_A8R8G8B8,
+                D3DPOOL_DEFAULT,
+                &mut texture,
+                std::ptr::null_mut(),
+            )
+        }
+        .map_err(|_| Error::Native("CreateTexture"))?;
+        let texture = texture.ok_or(Error::Native("null texture"))?;
+        let mut locked = D3DLOCKED_RECT::default();
+        unsafe { texture.LockRect(0, &mut locked, std::ptr::null(), D3DLOCK_DISCARD as u32) }
+            .map_err(|_| Error::Native("LockRect"))?;
+        let row_bytes = image.width as usize * 4;
+        if locked.pBits.is_null() || locked.Pitch < row_bytes as i32 {
+            let _ = unsafe { texture.UnlockRect(0) };
+            return Err(Error::Native("invalid texture pitch"));
+        }
+        for y in 0..image.height as usize {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    image.bgra.as_ptr().add(y * row_bytes),
+                    (locked.pBits as *mut u8).add(y * locked.Pitch as usize),
+                    row_bytes,
+                );
+            }
+        }
+        unsafe { texture.UnlockRect(0) }.map_err(|_| Error::Native("UnlockRect"))?;
+        let mut wrapper = Box::new([0u64; 8]);
+        let wrap: Wrap = unsafe { native.function("texture_wrap") };
+        unsafe {
+            wrap(wrapper.as_mut_ptr(), texture.as_raw());
+        }
+        let result = Self { wrapper };
+        if result.wrapper[1] == 0 || result.wrapper[2] as u32 == 0 {
+            return Err(Error::Native("AFP texture registration"));
+        }
+        // Constructor owns a COM reference; local COM owner is now released.
+        Ok(result)
+    }
+
+    fn descriptor(&self) -> *const u8 {
+        unsafe { self.wrapper.as_ptr().cast::<u8>().add(24) }
+    }
+}
+
+impl Drop for Texture {
+    fn drop(&mut self) {
+        if let Some(native) = NATIVE.get() {
+            let destroy: Destroy = unsafe { native.function("texture_destroy") };
+            unsafe {
+                destroy(self.wrapper.as_mut_ptr());
+            }
+        }
+    }
+}
+
+struct Graphics {
+    selection: Selection,
+    background: usize,
+    texture: Option<Texture>,
+    attempted: bool,
+    failed: bool,
+}
+
+impl Graphics {
+    const fn new() -> Self {
+        Self {
+            selection: Selection {
+                active: false,
+                selected: None,
+            },
+            background: 0,
+            texture: None,
+            attempted: false,
+            failed: false,
+        }
+    }
+
+    unsafe fn stock(&self, n: &Native) {
+        if self.background == 0 {
+            return;
+        }
+        let movie = unsafe { field(self.background, n.profile.layout.background_movie) };
+        let find: FindClip = unsafe { n.function("find_clip") };
+        let clip = unsafe { find(movie, c"illust".as_ptr().cast()) };
+        if clip == 0 {
+            return;
+        }
+        let archive = unsafe { field(self.background, n.profile.layout.background_archive) };
+        let visible: Visible = unsafe { n.function("set_visible") };
+        if archive != 0 {
+            let set: SetArchive = unsafe { n.function("set_archive") };
+            let origin: Origin = unsafe { n.function("set_origin") };
+            unsafe {
+                set(clip, archive, c"result_bg".as_ptr().cast());
+                origin(clip, 3, 3);
+                visible(clip, 1);
+            }
+        } else {
+            unsafe {
+                visible(clip, 0);
+            }
+        }
+    }
+
+    unsafe fn update(&mut self, n: &Native, background: usize) {
+        if self.failed {
+            return;
+        }
+        if !self.selection.active {
+            let pending = PENDING.try_lock().ok().and_then(|mut p| p.take());
+            self.selection.enter(pending);
+            self.background = background;
+            self.attempted = false;
+            if self.selection.selected.is_none() {
+                event(Event::Stock);
+            }
+        }
+        if self.background != background {
+            self.failed = true;
+            event(Event::Fault("unexpected simultaneous results instance"));
+            return;
+        }
+        if self.texture.is_none() && !self.attempted {
+            self.attempted = true;
+            if let Some(image) = &self.selection.selected {
+                let start = Instant::now();
+                match unsafe { Texture::upload(n, image) } {
+                    Ok(texture) => {
+                        self.texture = Some(texture);
+                        event(Event::Applied {
+                            width: image.width,
+                            height: image.height,
+                            upload_us: start.elapsed().as_micros(),
+                        });
+                    }
+                    Err(_) => {
+                        event(Event::Fault(
+                            "texture upload/registration failed; stock this visit",
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(texture) = &self.texture {
+            let find: FindClip = unsafe { n.function("find_clip") };
+            let clip = unsafe {
+                find(
+                    field(background, n.profile.layout.background_movie),
+                    c"illust".as_ptr().cast(),
+                )
+            };
+            if clip == 0 {
+                return;
+            }
+            let set: SetTexture = unsafe { n.function("set_texture") };
+            let visible: Visible = unsafe { n.function("set_visible") };
+            if unsafe { set(clip, texture.descriptor()) } == 0 {
+                unsafe {
+                    self.stock(n);
+                }
+                self.failed = true;
+                event(Event::Fault("AFP bind rejected; feature disabled"));
+                return;
+            }
+            // Preserve the native origin/layout established by the original callback.
+            // The configured canvas defaults to 1920x1080; verify crop in game.
+            unsafe {
+                visible(clip, 1);
+            }
+        }
+    }
+
+    unsafe fn invalidate(&mut self, n: &Native) {
+        unsafe {
+            self.stock(n);
+        }
+        self.texture = None;
+        self.attempted = false;
+    }
+}
+
+fn boundary(f: impl FnOnce()) {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
+        ENABLED.store(false, Ordering::Release);
+        event(Event::Fault("Rust panic; custom rendering disabled"));
+    }
+}
+
+unsafe extern "system" fn background_hook(this: usize, tick: u32) -> usize {
+    let n = NATIVE.get().expect("published before hook");
+    let original: Background = unsafe { n.function("background_update") };
+    let result = unsafe { original(this, tick) };
+    if !ENABLED.load(Ordering::Acquire) || !READY.load(Ordering::Acquire) {
+        return result;
+    }
+    boundary(|| {
+        // Restrict the shared component table to ordinary CStageResultScene.
+        let layout = &n.profile.layout;
+        if this < layout.scene_background
+            || unsafe { field(this - layout.scene_background, 0) } != n.base + layout.scene_vtable
+        {
+            return;
+        }
+        if unsafe { GetCurrentThreadId() } != OWNER.load(Ordering::Acquire) {
+            ENABLED.store(false, Ordering::Release);
+            event(Event::Fault("results and presentation thread differ"));
+            return;
+        }
+        if let Some(mut state) = graphics_state() {
+            unsafe {
+                state.update(n, this);
+            }
+        }
+    });
+    result
+}
+
+unsafe extern "system" fn cleanup_hook(this: usize) -> usize {
+    let n = NATIVE.get().expect("published before hook");
+    retire_scene(n, this);
+    let original: Cleanup = unsafe { n.function("result_cleanup") };
+    unsafe { original(this) }
+}
+
+fn retire_scene(n: &Native, this: usize) {
+    // Restore the stock binding while this scene still owns valid clips.
+    boundary(|| {
+        if let Some(mut state) = graphics_state()
+            && state.background == this + n.profile.layout.scene_background
+        {
+            unsafe {
+                state.invalidate(n);
+            }
+            state.background = 0;
+            state.selection.leave();
+            REQUEST.fetch_add(1, Ordering::AcqRel);
+        }
+    });
+}
+
+unsafe extern "system" fn delete_hook(this: usize, flags: u8) -> usize {
+    let n = NATIVE.get().expect("published before hook");
+    // Also cover destruction that did not run the normal scene cleanup callback.
+    retire_scene(n, this);
+    let original: SceneDelete = unsafe { n.function("result_delete") };
+    unsafe { original(this, flags) }
+}
+
+fn module_path(module: usize) -> Result<PathBuf> {
+    let mut buffer = vec![0u16; 32768];
+    let size = unsafe { GetModuleFileNameW(module as _, buffer.as_mut_ptr(), buffer.len() as u32) };
+    if size == 0 || size as usize >= buffer.len() {
+        return Err(Error::Native("module path"));
+    }
+    use std::os::windows::ffi::OsStringExt;
+    Ok(std::ffi::OsString::from_wide(&buffer[..size as usize]).into())
+}
+
+unsafe fn patch_slot(address: usize, expected: usize, replacement: usize) -> Result<()> {
+    let mut old = 0;
+    if unsafe { VirtualProtect(address as _, 8, PAGE_READWRITE, &mut old) } == 0 {
+        return Err(Error::Native("vtable protection"));
+    }
+    let slot = unsafe { &*(address as *const AtomicUsize) };
+    let exchanged =
+        slot.compare_exchange(expected, replacement, Ordering::SeqCst, Ordering::SeqCst);
+    let mut unused = 0;
+    let restored = unsafe { VirtualProtect(address as _, 8, old, &mut unused) };
+    if exchanged.is_err() {
+        return Err(Error::Native("vtable already hooked"));
+    }
+    if restored == 0 {
+        return Err(Error::Native("vtable protection restoration"));
+    }
+    Ok(())
+}
+
+fn attach() -> Result<()> {
+    let name: Vec<u16> = "bm2dx.dll\0".encode_utf16().collect();
+    let base = unsafe { GetModuleHandleW(name.as_ptr()) } as usize;
+    if base == 0 {
+        return Err(Error::Build("bm2dx.dll not loaded"));
+    }
+    let data = std::fs::read(module_path(base)?)?;
+    let profile = profile::verify_file(&data)?;
+    // Memory is the already loaded, fingerprinted PE. Only known mapped .text/.rdata
+    // regions are read. Refuse foreign detours at the required native entry points.
+    for guard in &profile.guards {
+        let bytes = hex::decode(&guard.hex).map_err(|_| Error::Build("embedded guard"))?;
+        let live =
+            unsafe { std::slice::from_raw_parts((base + guard.rva) as *const u8, bytes.len()) };
+        if live != bytes {
+            return Err(Error::Build("native entry guard mismatch"));
+        }
+    }
+    for table in &profile.tables {
+        if unsafe { field(base + table.rva, table.slot * 8) } != base + table.target {
+            return Err(Error::Build("native vtable guard mismatch"));
+        }
+    }
+    NATIVE
+        .set(Native { base, profile })
+        .map_err(|_| Error::Native("already attached"))?;
+    let n = NATIVE.get().unwrap();
+    let replacements = [
+        background_hook as *const () as usize,
+        cleanup_hook as *const () as usize,
+        delete_hook as *const () as usize,
+    ];
+    for (index, table) in n.profile.tables.iter().enumerate() {
+        let result = unsafe {
+            patch_slot(
+                base + table.rva + table.slot * 8,
+                base + table.target,
+                replacements[index],
+            )
+        };
+        if let Err(e) = result {
+            // Include the failed slot in case exchange succeeded but protection
+            // restoration failed. CAS never overwrites somebody else's value.
+            for (table, replacement) in n.profile.tables[..=index].iter().zip(replacements) {
+                let _ = unsafe {
+                    patch_slot(
+                        base + table.rva + table.slot * 8,
+                        replacement,
+                        base + table.target,
+                    )
+                };
+            }
+            return Err(e);
+        }
+    }
+    ENABLED.store(!STOP.load(Ordering::Acquire), Ordering::Release);
+    Ok(())
+}
+
+fn log(root: &Path, text: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(root.join("iidxbg.log"))
+    {
+        let _ = writeln!(f, "{text}");
+    }
+}
+
+fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
+    unsafe {
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
+    let run = || -> Result<()> {
+        let config = Config::load(&root.join("iidxbg.toml"))?;
+        if !config.enabled {
+            log(&root, "Disabled in configuration");
+            return Ok(());
+        }
+        let mut provider = Provider::new(config)?;
+        attach()?;
+        log(
+            &root,
+            &format!(
+                "Attached {}. Waiting for results. Live validation pending.",
+                NATIVE.get().unwrap().profile.label
+            ),
+        );
+        let mut completed = 0;
+        let mut next_attempt = Instant::now();
+        while !STOP.load(Ordering::Acquire) {
+            for message in rx.try_iter().take(64) {
+                match message {
+                    Event::Applied {
+                        width,
+                        height,
+                        upload_us,
+                    } => log(
+                        &root,
+                        &format!("Texture ready: {width}x{height}; upload {upload_us} us"),
+                    ),
+                    Event::Stock => log(
+                        &root,
+                        "No prepared image at results entry; stock this visit",
+                    ),
+                    Event::Fault(text) => log(&root, text),
+                    Event::Invalidated => log(&root, "Graphics resources invalidated"),
+                }
+            }
+            let generation = REQUEST.load(Ordering::Acquire);
+            if generation != completed && Instant::now() >= next_attempt {
+                match provider.prepare() {
+                    Ok(image) => {
+                        log(&root, &format!("Prepared {}", image.label));
+                        if generation == REQUEST.load(Ordering::Acquire)
+                            && !STOP.load(Ordering::Acquire)
+                        {
+                            *PENDING.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some(Arc::new(image));
+                            completed = generation;
+                        }
+                        next_attempt = Instant::now() + Duration::from_secs(30);
+                    }
+                    Err(e) => {
+                        log(
+                            &root,
+                            &format!("Image preparation failed: {e}; retry in 60 seconds"),
+                        );
+                        next_attempt = Instant::now() + Duration::from_secs(60);
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        Ok(())
+    };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            ENABLED.store(false, Ordering::Release);
+            log(&root, &format!("Startup failed: {e}"));
+        }
+        Err(_) => {
+            ENABLED.store(false, Ordering::Release);
+            log(&root, "Worker panic; feature disabled");
+        }
+    }
+}
+
+#[repr(C)]
+struct Frame {
+    size: u32,
+    device: *mut c_void,
+    window: *mut c_void,
+    width: u32,
+    height: u32,
+}
+type Register =
+    unsafe extern "C" fn(extern "C" fn(u32, *const Frame, *mut c_void), *mut c_void) -> i32;
+
+extern "C" fn graphics(event_id: u32, _: *const Frame, _: *mut c_void) {
+    boundary(|| {
+        if event_id == 0 {
+            OWNER.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
+            READY.store(true, Ordering::Release);
+        } else if event_id == 2 || event_id == 3 {
+            READY.store(false, Ordering::Release);
+            if let Some(n) = NATIVE.get() {
+                if let Some(mut state) = graphics_state() {
+                    unsafe {
+                        state.invalidate(n);
+                    }
+                    // A device can be destroyed/recreated during a result visit.
+                    // Keep the CPU selection frozen; scene cleanup/destruction,
+                    // not the graphics device, owns the visit boundary.
+                } else {
+                    ENABLED.store(false, Ordering::Release);
+                    event(Event::Fault("graphics invalidation reentry"));
+                }
+            }
+            event(Event::Invalidated);
+        }
+    });
+}
+
+extern "C" fn shutdown() {
+    ENABLED.store(false, Ordering::Release);
+    STOP.store(true, Ordering::Release);
+    // SDK has already sent DESTROY and stopped rendering. DLL is pinned:
+    // vtable callbacks remain valid and simply call their original functions.
+}
+
+#[repr(C)]
+struct Sdk {
+    size: u32,
+    functions: [usize; 18],
+}
+type Init = unsafe extern "C" fn(u32, extern "C" fn(), *mut c_void) -> i32;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn spice_sdk_entry_point(init: Option<Init>) -> i32 {
+    let Some(init) = init else {
+        return 1;
+    };
+    if STARTED.swap(true, Ordering::AcqRel) {
+        return 1;
+    }
+    let mut sdk = Sdk {
+        size: std::mem::size_of::<Sdk>() as u32,
+        functions: [0; 18],
+    };
+    let code = unsafe { init(0, shutdown, (&mut sdk as *mut Sdk).cast()) };
+    if code != 0 {
+        return code;
+    }
+    let Ok(path) = module_path(MODULE.load(Ordering::Acquire)) else {
+        return 1;
+    };
+    let root = path.parent().unwrap().to_owned();
+    if sdk.functions[17] == 0 {
+        log(
+            &root,
+            "Spice SDK v0.4 register_d3d9 is required; no hooks installed",
+        );
+        return 1;
+    }
+    let mut pinned = std::ptr::null_mut();
+    if unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            spice_sdk_entry_point as *const () as *const u16,
+            &mut pinned,
+        )
+    } == 0
+    {
+        return 1;
+    }
+    let register: Register = unsafe { std::mem::transmute(sdk.functions[17]) };
+    if unsafe { register(graphics, std::ptr::null_mut()) } != 0 {
+        log(
+            &root,
+            "Spice graphics registration failed; no hooks installed",
+        );
+        return 1;
+    }
+    let (tx, rx) = mpsc::sync_channel(64);
+    let _ = EVENTS.set(tx);
+    match thread::Builder::new()
+        .name("iidxbg-images".into())
+        .spawn(move || worker(root, rx))
+    {
+        Ok(_) => 0,
+        Err(_) => 1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn DllMain(module: *mut c_void, reason: u32, _: *mut c_void) -> i32 {
+    if reason == 1 {
+        MODULE.store(module as usize, Ordering::Release);
+    }
+    if reason == 0 {
+        STOP.store(true, Ordering::Release);
+    }
+    1
+}
