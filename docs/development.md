@@ -39,6 +39,16 @@ visit freezing/fallback. These cannot validate native callbacks or GPU reset
 inside IIDX. See the [architecture](architecture.md) and native evidence for
 [IIDX 33](iidx33-analysis.md) / [IIDX 34](iidx34-analysis.md).
 
+With a supported game DLL available locally, run `scripts/smoke-attach.py` in
+`native`, `chain` and `bad-tail` modes as documented in
+[hook compatibility](iidx33-hook-compatibility.md). This maps the DLL privately
+without executing game code and verifies vtable installation/rejection.
+CI does not include game binaries; these checks run locally.
+
+`python scripts/verify-origin.py path/to/bm2dx.dll` additionally emulates the
+guarded pixel-origin helper with mocked AFP imports (`pefile`/`unicorn` required).
+It verifies float argument passing, linked clip traversal and property writes.
+
 `scripts/package.ps1` copies the built DLL, repository-default commented TOML, licenses,
 and diagnostic image into `dist/iidxbg`, then produces a ZIP. It preserves an
 existing dist configuration. Delete or move dist yourself if you want a pristine

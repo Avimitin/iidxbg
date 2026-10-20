@@ -10,8 +10,9 @@ One DLL supports the inspected **IIDX 33 / 20260812** and
 Other builds are refused. Fingerprints and native evidence:
 [IIDX 33](docs/iidx33-analysis.md), [IIDX 34](docs/iidx34-analysis.md).
 Requires spice2x with **Spice SDK v0.4 D3D9 callbacks**.
-Build and offline checks are available; **in-game appearance and stability have
-not yet been validated**. It targets the native `illust` area, which may be
+The user has confirmed image display and corrected placement in **IIDX 33**.
+**IIDX 34 has only offline validation**; broader stability testing remains.
+It targets the native `illust` area, which may be
 masked or cropped by the game.
 
 ## Install and try

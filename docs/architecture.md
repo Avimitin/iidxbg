@@ -7,7 +7,10 @@ compatibility with older or newer versions.
 Configuration, local selection, Konachan, downloading, decoding, pending pixels
 and result-visit selection are shared. The native boundary selects a profile by
 the game file's exact SHA-256, checks the PE image size, then checks live native
-entry bytes and original vtable targets before installing hooks.
+entry bytes and original vtable targets before installing hooks. A changed entry
+is accepted only for the constrained MinHook chain described in
+[the IIDX 33 compatibility investigation](iidx33-hook-compatibility.md).
+Calls continue through the original game entry so the existing hook stays active.
 
 Each profile owns its addresses, scene layout and hook slots. IIDX 33 uses
 scene +256 and cleanup slot 14; IIDX 34 uses +264 and slot 17. Runtime code does
@@ -28,4 +31,5 @@ packaging and invite loading the wrong plugin without improving isolation.
 
 See [IIDX 33 evidence](iidx33-analysis.md) and
 [IIDX 34 evidence](iidx34-analysis.md). Static compatibility does not establish
-in-game stability; both versions still require real-game validation.
+in-game stability. The user confirmed IIDX 33 image display and corrected
+placement; broader lifecycle testing remains. IIDX 34 has only offline validation.

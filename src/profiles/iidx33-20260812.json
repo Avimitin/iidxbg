@@ -19,7 +19,8 @@
     "texture_wrap": 10886304,
     "texture_destroy": 10886704,
     "get_device": 9681968,
-    "result_delete": 9612752
+    "result_delete": 9612752,
+    "set_origin_pixels": 3410384
   },
   "guards": [
     {
@@ -65,6 +66,10 @@
     {
       "rva": 9612752,
       "hex": "48895c2408574883ec208bda488bf9e8"
+    },
+    {
+      "rva": 3410384,
+      "hex": "40534883ec408b99000200000f297424"
     }
   ],
   "tables": [

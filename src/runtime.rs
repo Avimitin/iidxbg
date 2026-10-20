@@ -1,6 +1,7 @@
 //! Shared verified ABI; native addresses/layouts come from exact-build profiles.
 use crate::{
-    Error, Result, config::Config, pixels::Prepared, profile, source::Provider, state::Selection,
+    Error, Result, config::Config, hook_chain, pixels::Prepared, profile, source::Provider,
+    state::Selection,
 };
 use std::{
     ffi::c_void,
@@ -16,13 +17,20 @@ use std::{
 };
 use windows::{Win32::Graphics::Direct3D9::*, core::Interface};
 use windows_sys::Win32::System::{
+    Diagnostics::Debug::ReadProcessMemory,
     LibraryLoader::{
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleFileNameW,
-        GetModuleHandleExW, GetModuleHandleW,
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW, GetModuleHandleExW,
+        GetModuleHandleW,
     },
-    Memory::{PAGE_READWRITE, VirtualProtect},
+    Memory::{
+        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ,
+        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READWRITE, VirtualProtect,
+        VirtualQuery,
+    },
     Threading::{
-        GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+        GetCurrentProcess, GetCurrentThread, GetCurrentThreadId, SetThreadPriority,
+        THREAD_PRIORITY_BELOW_NORMAL,
     },
 };
 
@@ -52,6 +60,10 @@ enum Event {
         width: u32,
         height: u32,
         upload_us: u128,
+    },
+    Centered {
+        x: f32,
+        y: f32,
     },
     Stock,
     Fault(&'static str),
@@ -86,6 +98,7 @@ type SetArchive = unsafe extern "system" fn(usize, usize, *const u8) -> u8;
 type SetTexture = unsafe extern "system" fn(usize, *const u8) -> u8;
 type Visible = unsafe extern "system" fn(usize, u8);
 type Origin = unsafe extern "system" fn(usize, i32, i32) -> usize;
+type OriginPixels = unsafe extern "system" fn(usize, f32, f32);
 type Wrap = unsafe extern "system" fn(*mut u64, *mut c_void) -> usize;
 type Destroy = unsafe extern "system" fn(*mut u64) -> usize;
 type Device = unsafe extern "system" fn() -> *mut c_void;
@@ -97,6 +110,7 @@ unsafe fn field(object: usize, offset: usize) -> usize {
 struct Texture {
     // Stable 8-byte-aligned storage. Native constructor initializes all 64 bytes.
     wrapper: Box<[u64; 8]>,
+    center: [f32; 2],
 }
 
 impl Texture {
@@ -143,7 +157,10 @@ impl Texture {
         unsafe {
             wrap(wrapper.as_mut_ptr(), texture.as_raw());
         }
-        let result = Self { wrapper };
+        let result = Self {
+            wrapper,
+            center: [image.width as f32 * 0.5, image.height as f32 * 0.5],
+        };
         if result.wrapper[1] == 0 || result.wrapper[2] as u32 == 0 {
             return Err(Error::Native("AFP texture registration"));
         }
@@ -173,6 +190,7 @@ struct Graphics {
     texture: Option<Texture>,
     attempted: bool,
     failed: bool,
+    layout_reported: bool,
 }
 
 impl Graphics {
@@ -186,6 +204,7 @@ impl Graphics {
             texture: None,
             attempted: false,
             failed: false,
+            layout_reported: false,
         }
     }
 
@@ -225,6 +244,7 @@ impl Graphics {
             self.selection.enter(pending);
             self.background = background;
             self.attempted = false;
+            self.layout_reported = false;
             if self.selection.selected.is_none() {
                 event(Event::Stock);
             }
@@ -276,10 +296,20 @@ impl Graphics {
                 event(Event::Fault("AFP bind rejected; feature disabled"));
                 return;
             }
-            // Preserve the native origin/layout established by the original callback.
-            // The configured canvas defaults to 1920x1080; verify crop in game.
+            // The archive-only center helper uses archive metadata and is skipped
+            // by the stock no-archive branch. Center the uploaded texture explicitly
+            // after binding; keep the clip's native position/scale/animation.
+            let origin: OriginPixels = unsafe { n.function("set_origin_pixels") };
             unsafe {
+                origin(clip, texture.center[0], texture.center[1]);
                 visible(clip, 1);
+            }
+            if !self.layout_reported {
+                self.layout_reported = true;
+                event(Event::Centered {
+                    x: texture.center[0],
+                    y: texture.center[1],
+                });
             }
         }
     }
@@ -389,7 +419,89 @@ unsafe fn patch_slot(address: usize, expected: usize, replacement: usize) -> Res
     Ok(())
 }
 
-fn attach() -> Result<()> {
+// Bounded read-only inspection; never execute a discovered target.
+// Acceptance is decided separately by hook_chain's structural checks.
+fn read_live<const N: usize>(address: usize) -> Option<[u8; N]> {
+    let mut bytes = [0; N];
+    let mut read = 0;
+    let ok = unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            address as _,
+            bytes.as_mut_ptr().cast(),
+            N,
+            &mut read,
+        )
+    };
+    (ok != 0 && read == N).then_some(bytes)
+}
+
+fn executable(address: usize) -> bool {
+    let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+    (unsafe { VirtualQuery(address as _, &mut info, std::mem::size_of_val(&info)) }) != 0
+        && info.State == MEM_COMMIT
+        && info.Protect & PAGE_GUARD == 0
+        && matches!(
+            info.Protect & 0xff,
+            PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
+        )
+}
+
+fn code_module(address: usize) -> Option<(usize, String)> {
+    let mut module = std::ptr::null_mut();
+    if unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            address as *const u16,
+            &mut module,
+        )
+    } == 0
+    {
+        return None;
+    }
+    Some((
+        module as usize,
+        module_path(module as usize).ok()?.display().to_string(),
+    ))
+}
+
+fn describe_entry_jump(root: &Path, mut address: usize) {
+    for _ in 0..4 {
+        let Some(bytes) = read_live::<16>(address) else {
+            return;
+        };
+        let target = if bytes[0] == 0xe9 {
+            address.checked_add(5).and_then(|next|
+                next.checked_add_signed(i32::from_le_bytes(bytes[1..5].try_into().unwrap()) as isize))
+        } else if bytes[..2] == [0xff, 0x25] {
+            address
+                .checked_add(6)
+                .and_then(|next| {
+                    next.checked_add_signed(
+                        i32::from_le_bytes(bytes[2..6].try_into().unwrap()) as isize
+                    )
+                })
+                .and_then(read_live::<8>)
+                .map(usize::from_le_bytes)
+        } else {
+            return;
+        };
+        let Some(target) = target else { return };
+        let owner = code_module(target)
+            .map(|(_, path)| path)
+            .unwrap_or_else(|| "no loaded module (possibly a trampoline)".into());
+        log(
+            root,
+            &format!("Entry jump {address:#x} -> {target:#x}: {owner}"),
+        );
+        if target == address {
+            return;
+        }
+        address = target;
+    }
+}
+
+fn attach(root: &Path) -> Result<()> {
     let name: Vec<u16> = "bm2dx.dll\0".encode_utf16().collect();
     let base = unsafe { GetModuleHandleW(name.as_ptr()) } as usize;
     if base == 0 {
@@ -397,20 +509,82 @@ fn attach() -> Result<()> {
     }
     let data = std::fs::read(module_path(base)?)?;
     let profile = profile::verify_file(&data)?;
+    log(
+        root,
+        &format!(
+            "Verified {} on disk (SHA-256 {}); loaded base {base:#x}. Checking live code.",
+            profile.label, profile.sha256,
+        ),
+    );
     // Memory is the already loaded, fingerprinted PE. Only known mapped .text/.rdata
-    // regions are read. Refuse foreign detours at the required native entry points.
+    // regions are read. Preserve only the validated MinHook form; unknown changes
+    // still fail before any vtable mutation.
+    let mut mismatch = None;
     for guard in &profile.guards {
-        let bytes = hex::decode(&guard.hex).map_err(|_| Error::Build("embedded guard"))?;
-        let live =
-            unsafe { std::slice::from_raw_parts((base + guard.rva) as *const u8, bytes.len()) };
-        if live != bytes {
-            return Err(Error::Build("native entry guard mismatch"));
+        let live = unsafe {
+            std::slice::from_raw_parts((base + guard.rva) as *const u8, guard.hex.len() / 2)
+        };
+        let name = profile
+            .rvas
+            .iter()
+            .find(|(_, rva)| **rva == guard.rva)
+            .map(|(name, _)| name.as_str())
+            .unwrap_or("unknown");
+        if let Err(error) = guard.check(name, live) {
+            let original = hex::decode(&guard.hex).map_err(|_| Error::Build("embedded guard"))?;
+            match hook_chain::inspect(
+                base + guard.rva,
+                &original,
+                live,
+                |addr, size| {
+                    (size == 14)
+                        .then(|| read_live::<14>(addr))
+                        .flatten()
+                        .map(|b| b.to_vec())
+                },
+                executable,
+                |addr| {
+                    code_module(addr)
+                        .filter(|(module, _)| *module != base)
+                        .map(|(_, path)| path)
+                },
+            ) {
+                Ok(Some(chain)) => log(
+                    root,
+                    &format!(
+                        "Preserving MinHook chain at {name} (RVA {:#x}): relay {:#x} -> {} ({:#x}); calls remain through the game entry",
+                        guard.rva, chain.relay, chain.module, chain.target,
+                    ),
+                ),
+                Ok(None) => {}
+                Err(reason) => {
+                    log(root, &error.to_string());
+                    log(root, &format!("Hook chain rejected: {reason}"));
+                    describe_entry_jump(root, base + guard.rva);
+                    mismatch.get_or_insert(error);
+                }
+            }
         }
     }
     for table in &profile.tables {
-        if unsafe { field(base + table.rva, table.slot * 8) } != base + table.target {
-            return Err(Error::Build("native vtable guard mismatch"));
+        let actual = unsafe { field(base + table.rva, table.slot * 8) };
+        if actual != base + table.target {
+            let error = Error::TableMismatch {
+                rva: table.rva,
+                slot: table.slot,
+                expected: base + table.target,
+                actual,
+            };
+            log(root, &error.to_string());
+            mismatch.get_or_insert(error);
         }
+    }
+    if let Some(error) = mismatch {
+        log(
+            root,
+            "Attachment refused before installing hooks. A live-code difference is not a malformed DLL file.",
+        );
+        return Err(error);
     }
     NATIVE
         .set(Native { base, profile })
@@ -469,7 +643,7 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
             return Ok(());
         }
         let mut provider = Provider::new(config)?;
-        attach()?;
+        attach(&root)?;
         log(
             &root,
             &format!(
@@ -493,6 +667,10 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                     Event::Stock => log(
                         &root,
                         "No prepared image at results entry; stock this visit",
+                    ),
+                    Event::Centered { x, y } => log(
+                        &root,
+                        &format!("Custom illustration origin set to ({x}, {y}) texture pixels"),
                     ),
                     Event::Fault(text) => log(&root, text),
                     Event::Invalidated => log(&root, "Graphics resources invalidated"),

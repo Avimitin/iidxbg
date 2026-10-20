@@ -1,4 +1,5 @@
 pub mod config;
+pub mod hook_chain;
 pub mod pixels;
 pub mod profile;
 pub mod source;
@@ -31,6 +32,24 @@ pub enum Error {
     Url,
     #[error("Unsupported or malformed game DLL: {0}")]
     Build(&'static str),
+    #[error(
+        "Live game code differs at {function} (RVA {rva:#x}): expected {expected}, actual {actual}"
+    )]
+    EntryMismatch {
+        function: String,
+        rva: usize,
+        expected: String,
+        actual: String,
+    },
+    #[error(
+        "Live game vtable differs at RVA {rva:#x}, slot {slot}: expected {expected:#x}, actual {actual:#x}"
+    )]
+    TableMismatch {
+        rva: usize,
+        slot: usize,
+        expected: usize,
+        actual: usize,
+    },
     #[error("Native/graphics operation failed: {0}")]
     Native(&'static str),
 }

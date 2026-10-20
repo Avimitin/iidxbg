@@ -84,7 +84,9 @@ constructor, and calls the non-deleting destructor before freeing storage.
 
 Runtime guards in `src/profiles/iidx34-20260917.json` cover every directly called native function
 and all three modified vtable slots. File SHA-256 must match before memory hooks are
-installed. Loaded entry-byte mismatches and already replaced slots are rejected.
+installed. Unknown loaded entry-byte mismatches and already replaced slots are rejected.
+The verified MinHook relay form is recognized for both profiles; see the
+[2026-10-21 compatibility investigation](iidx33-hook-compatibility.md).
 Unrelated in-memory patches may coexist if they do not alter those guards.
 The DLL file is never patched.
 
@@ -102,7 +104,9 @@ The DLL file is never patched.
   previous selection. A try-lock miss also freezes the previous selection.
 - GPU creation/upload occurs once at results entry, never on the download worker.
   Texture dimensions are configured, default 1920x1080. Native origin/layout is
-  preserved. The descriptor is rebound after each original callback.
+  preserved apart from explicitly centering the custom texture with its own
+  dimensions (see the 2026-10-21 origin correction below). The descriptor is
+  rebound after each original callback.
 - Cleanup restores the stock binding while clips are valid, destroys the custom
   texture, ends the visit and requests the next image. Preparation begins ahead
   of the next results, usually during selection/gameplay.
@@ -150,3 +154,26 @@ classes are deliberately not hooked. Inspect transitions, repeated visits,
 early exits, device resets and shutdown. Measure frame-time tails with local
 and remote sources enabled, including decode load and first-results GPU upload.
 Native access violations are not caught by Rust panic containment.
+
+## Custom image origin — 2026-10-21
+
+Same IIDX 34 input/hash as above. Independently decompiled the pixel-coordinate
+origin overload at **RVA `0x32a3e0`**. Signature:
+`void(clip: RCX, x: XMM1/f32, y: XMM2/f32)`. It reads object +512, writes the
+float pair through AFP property 4123, marks property 4126 dirty, and follows
+linked clips through `afp_core_106(id, 6)`.
+Entry guard: `40534883ec408b99000200000f297424`.
+
+The archive-center helper `0x32a460(clip, 3, 3)` derives its dimensions from the
+archive/name. Custom images now use the new guarded helper after texture binding
+with half the uploaded width/height, before setting visibility. This preserves
+the clip's position/scale/animation while explicitly centering the new texture.
+It also handles the stock no-archive path, which never established an origin.
+
+`python scripts/verify-origin.py path/to/bm2dx.dll` emulates this build's actual
+helper with mocked AFP imports and two linked clips. Centers `(960,540)`,
+`(640,360)` and `(960.5,540.5)` passed; the float ABI and dirty-property sequence
+match the separately inspected IIDX 33 overload. The reported misplaced image
+was on IIDX 33; IIDX 34 has not been visually tested. AFP implementation details
+from the 33 installation are documented in its build analysis and are not
+assumed to identify an installed AFP binary on 34.

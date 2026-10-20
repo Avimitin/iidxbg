@@ -28,6 +28,21 @@ pub struct Guard {
     pub hex: String,
 }
 
+impl Guard {
+    pub fn check(&self, function: &str, live: &[u8]) -> Result<()> {
+        let expected = hex::decode(&self.hex).map_err(|_| Error::Build("embedded guard"))?;
+        if live != expected {
+            return Err(Error::EntryMismatch {
+                function: function.into(),
+                rva: self.rva,
+                expected: self.hex.clone(),
+                actual: hex::encode(live),
+            });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 pub struct Table {
     pub rva: usize,
@@ -92,6 +107,34 @@ pub fn verify_file(data: &[u8]) -> Result<Profile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_modification_is_reported_separately_from_file_identity() {
+        for p in supported() {
+            for guard in p.guards {
+                let name = p.rvas.iter().find(|(_, rva)| **rva == guard.rva).unwrap().0;
+                let mut live = hex::decode(&guard.hex).unwrap();
+                guard.check(name, &live).unwrap();
+                live[0] ^= 0xff;
+                let error = guard.check(name, &live).unwrap_err();
+                match &error {
+                    Error::EntryMismatch {
+                        function,
+                        rva,
+                        expected,
+                        actual,
+                    } => {
+                        assert_eq!(function, name);
+                        assert_eq!(*rva, guard.rva);
+                        assert_eq!(expected, &guard.hex);
+                        assert_eq!(actual, &hex::encode(live));
+                    }
+                    _ => panic!("live modification misclassified"),
+                }
+                assert!(!error.to_string().contains("malformed"));
+            }
+        }
+    }
+
     #[test]
     fn rejects_other_builds_and_truncated_pe() {
         assert!(verify_file(b"MZ").is_err());

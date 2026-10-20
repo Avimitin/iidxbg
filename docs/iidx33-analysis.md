@@ -68,9 +68,73 @@ shared AFP binding import and wrapper registration/destruction/descriptor.
 To extend support, repeat decompilation and lifetime analysis; similar bytes
 alone do not prove an ABI.
 
-No real-game test has been performed. First test with the diagnostic image:
+The user has confirmed image display and corrected placement on IIDX 33; see the placement
+investigation below. Full validation still requires the diagnostic image:
 check crop, origin, score readability, clear/failed results, player sides and
 Premium Free. Check repeated visits, cleanup, early exit, reset and shutdown.
 Measure frame-time tails during decoding and first-result upload.
 Specialized result scene classes are excluded by ordinary-scene vtable checks.
-This evidence establishes a native path, not successful live rendering.
+Static evidence establishes the native path; the user's report confirms basic
+live rendering on this installation.
+
+Update 2026-10-21: the supplied installation reached plugin initialization but
+failed a live entry guard. Disk identity matched. See the separate
+[hook compatibility record](iidx33-hook-compatibility.md), including the
+chart-requester precedent and remaining live validation.
+
+## Custom image origin — 2026-10-21
+
+Same IIDX 33 input/hash as above. The updated installation log confirms a
+preserved `result_cleanup` chain through `2dx-gsm.dll`, successful attachment,
+and a 1920x1080 upload (9584 microseconds). The user reports that only the image's
+top-left quarter appears in the screen's bottom-right quarter.
+
+The old custom path called `set_texture` and `set_visible` without establishing
+the uploaded texture's origin. The native result callback calls the archive
+center helper only when an archive exists; the no-archive branch hides the clip
+without centering it. Thus preserving an assumed native center is insufficient.
+The visual report is consistent with a zero origin at a screen-centered clip,
+but no live property readback was captured.
+
+Additional verified function: **RVA `0x3409d0`**, Win64
+`void(clip: RCX, x: XMM1/f32, y: XMM2/f32)`. It reads the AFP clip ID from
+object +512, writes property **4123** using the supplied pair of floats, marks
+property **4126** dirty with 1, and traverses linked clips using `afp_core_106(id, 6)`.
+Unlike `0x340a50(clip, 3, 3)`, it does not query dimensions from the original
+archive/name. Entry guard: `40534883ec408b99000200000f297424`.
+
+The custom path now binds the descriptor, sets this pixel origin to
+`(uploaded_width / 2, uploaded_height / 2)`, then shows the clip. For 1920x1080
+the origin is `(960, 540)`. It keeps native screen position, scale and animation.
+The operation repeats after each original callback because the original can
+rebind the stock texture. Stock restoration retains the archive-center helper.
+No manual X/Y settings are needed.
+
+The installed `afp-core.dll` was also inspected read-only:
+986,776 bytes, SHA-256
+`8fdf2f8a2d420790e44d0a89da5a7f7949c430b72fb117166afbcc8a642dc192`,
+preferred image base `0x180000000`. Relevant AFP RVAs:
+
+| RVA | Evidence |
+|---|---|
+| `0x1ea70` | Export ordinal 137; texture binding delegates to `0x1e850` / `0x1e710` |
+| `0x1bf60` | Converts descriptor dimensions and UV bounds to the internal texture description |
+| `0x74e90` / `0x74ad0` | Non-attach texture geometry; new bounds begin at zero and extend to texture extent |
+| `0x22d60` | Export ordinal 116, property setter dispatch |
+| `0x22b20` / `0x21910` | Property 4123 writes float pair at work +192/+196 and marks transform state dirty |
+
+These AFP internals explain the native helper; the plugin does not call internal
+AFP RVAs or access those fields directly. Inspection did not establish that
+every texture rebind resets the origin; the fix does not depend on that claim.
+
+Reproduce with `python scripts/verify-origin.py path/to/bm2dx.dll`
+(`pefile` and `unicorn` required). It emulates the actual helper with mocked AFP
+imports for two linked clips, verifying property IDs, dirty marking and Win64
+float arguments at centers `(960,540)`, `(640,360)` and `(960.5,540.5)`.
+All three cases passed.
+
+Follow-up 2026-10-21: the user confirmed that the corrected build works in-game.
+This confirms image display and placement on the reported IIDX 33 installation.
+The tested DLL SHA-256 is
+`3e8ac69538abd559320ae1e6ef93922ad1c0cc718a22a5ea9a6575a53a82ac76`.
+It does not establish all result modes, device-reset behavior or frame-time tails.

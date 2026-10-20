@@ -61,7 +61,8 @@ Downloads are retained until you delete them; there is no automatic disk evictio
 
 The game never receives a URL or an updated archive filename. The plugin decodes
 new bytes, creates a new texture and rebinds the native illustration. It preserves
-the game's existing illustration origin and other UI. The correct texture canvas
+the game's illustration position/animation and other UI, and centers the custom
+texture using half its own width/height as the origin. The correct texture canvas
 for every result layout still needs in-game verification; use the diagnostic
 image's border and central cross to check the crop.
 
