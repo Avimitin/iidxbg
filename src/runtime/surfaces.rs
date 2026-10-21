@@ -516,6 +516,10 @@ impl PremiumArea {
         };
         self.base = unsafe { field(object, *base) };
         self.custom = unsafe { field(object, *custom) };
+        event(Event::Diag(format!(
+            "premium area background: object={object:#x} base={:#x} custom={:#x} priority={}",
+            self.base, self.custom, self.priority
+        )));
     }
 
     unsafe fn refresh(&mut self, n: &Native, bundle: Option<Arc<Bundle>>, enabled: bool) {
@@ -583,86 +587,128 @@ impl PremiumArea {
         }
     }
 
-    fn released(&mut self, node: usize) -> Option<Texture> {
+    unsafe fn released(&mut self, n: &Native, node: usize) -> Option<Texture> {
         if let Some(sprite) = &mut self.sprite
             && sprite.node == node
         {
             sprite.node = 0;
             self.choice = None;
-            return sprite.texture.take();
+            let texture = sprite.texture.take();
+            // The sprite pool is retired with its scene while the premium nodes
+            // are session-global. Restore native visibility immediately so the
+            // area cannot stay black on the next screen.
+            for saved in self.hidden.iter_mut().filter_map(Option::take) {
+                unsafe { set_clip_visible(n, saved.handle, saved.visible) };
+            }
+            event(Event::Diag(
+                "premium area sprite released; native visibility restored".into(),
+            ));
+            return texture;
         }
         None
     }
 }
 
-/// Concentration-mode gameplay background. The native clip lives in the
-/// session-global concentration window and is shown/hidden per stage, so the
-/// replacement follows the native show flag rather than the scene lifetime.
+/// One native clip rebound to our prepared texture. The original archive/name
+/// binding is saved so disabling can return stock art through the same native
+/// setter the game itself uses for its customization backgrounds.
+struct BoundClip {
+    clip: usize,
+    /// Kept alive so the AFP node never references unregistered art.
+    _texture: Texture,
+    archive: usize,
+    name: [u8; 256],
+    restorable: bool,
+}
+
+impl BoundClip {
+    unsafe fn bind(n: &Native, clip: usize, image: &Prepared) -> Result<Self> {
+        // A CMovieClip stores its 256-byte name at +0, the AFP node id at +512
+        // and the archive pointer at +520. Only a complete archive/name pair can
+        // be rebound by the native archive setter.
+        let archive = unsafe { ((clip + 520) as *const usize).read() };
+        let mut name = [0u8; 256];
+        unsafe { std::ptr::copy_nonoverlapping(clip as *const u8, name.as_mut_ptr(), name.len()) };
+        let restorable = archive != 0
+            && name.contains(&0)
+            && name[0].is_ascii_graphic()
+            && name.iter().all(|b| (0x20..0x7f).contains(b) || *b == 0);
+        let texture = unsafe { Texture::upload(n, image) }?;
+        let set: SetTexture = unsafe { n.function("set_texture") };
+        if unsafe { set(clip, texture.descriptor()) } == 0 {
+            return Err(Error::Native("concentration texture bind"));
+        }
+        Ok(Self {
+            clip,
+            _texture: texture,
+            archive,
+            name,
+            restorable,
+        })
+    }
+
+    unsafe fn restore(&self, n: &Native) {
+        if !self.restorable {
+            return;
+        }
+        let set: SetArchive = unsafe { n.function("set_archive") };
+        unsafe { set(self.clip, self.archive, self.name.as_ptr().cast()) };
+    }
+}
+
+/// Concentration-mode gameplay background. Both candidate window elements are
+/// rebound to the prepared texture; the native clip keeps its own transform and
+/// draw order, so no screen rectangle is reconstructed. The replacement follows
+/// the native show flag and is frozen per stage.
 #[derive(Default)]
 struct Concentration {
     window: usize,
-    layer: usize,
-    layer_handle: u32,
-    clip: usize,
+    clips: [usize; 2],
     visible: bool,
     choice: Option<Arc<Bundle>>,
-    bound: Option<Arc<Bundle>>,
-    sprite: Option<Sprite>,
-    hidden: Option<NativeClip>,
+    bound_choice: Option<Arc<Bundle>>,
+    bound: Vec<BoundClip>,
 }
 
 impl Concentration {
-    /// Resolve the window layer that owns the concentration background. The
-    /// native apply/hide paths use layer index 1 and the named clip below it.
-    unsafe fn clip(n: &Native, window: usize) -> Option<(usize, usize)> {
+    /// Resolve the background clip in both concentration window elements. The
+    /// native apply path uses index 1; the default (no-customization) view may
+    /// use index 0, so try both and keep whichever exist.
+    unsafe fn resolve(n: &Native, window: usize) -> [usize; 2] {
+        let mut clips = [0usize; 2];
         if window == 0 {
-            return None;
+            return clips;
         }
         let getter: unsafe extern "system" fn(usize, *mut u32) -> *const usize =
             unsafe { n.function("concentration_layer") };
-        let mut index = 1u32;
-        let slot = unsafe { getter(window + 8, &mut index) };
-        if slot.is_null() {
-            return None;
-        }
-        let layer = unsafe { *slot };
-        if layer == 0 {
-            return None;
-        }
         let find: FindClip = unsafe { n.function("find_clip") };
-        let clip = unsafe { find(layer, c"concentration_bg_set/bg".as_ptr().cast()) };
-        (clip != 0).then_some((layer, clip))
+        for (index, slot) in clips.iter_mut().enumerate() {
+            let mut key = index as u32;
+            let entry = unsafe { getter(window + 8, &mut key) };
+            if entry.is_null() {
+                continue;
+            }
+            let layer = unsafe { *entry };
+            if layer == 0 {
+                continue;
+            }
+            let clip = unsafe { find(layer, c"concentration_bg_set/bg".as_ptr().cast()) };
+            *slot = clip;
+        }
+        clips
     }
 
     unsafe fn observe(&mut self, n: &Native, window: usize) {
-        if self.window == window && self.clip != 0 {
+        if self.window == window && (self.clips[0] != 0 || self.clips[1] != 0) {
             return;
         }
-        self.sprite = None;
-        self.hidden = None;
+        unsafe { self.release(n) };
         self.window = window;
-        self.layer = 0;
-        self.layer_handle = 0;
-        self.clip = 0;
-        let Some((layer, clip)) = (unsafe { Self::clip(n, window) }) else {
-            return;
-        };
-        self.layer = layer;
-        self.layer_handle = unsafe { ((layer + 528) as *const u32).read() };
-        self.clip = clip;
-    }
-
-    /// A missed native hide event must not leave our sprite over another scene.
-    unsafe fn reconcile(&mut self, n: &Native) {
-        if self.sprite.is_none() || self.layer_handle == 0 {
-            return;
-        }
-        if let Some(visible) = unsafe { clip_visible(n, self.layer_handle) }
-            && visible == 0
-        {
-            unsafe { self.restore(n) };
-            self.visible = false;
-        }
+        self.clips = unsafe { Self::resolve(n, window) };
+        event(Event::Diag(format!(
+            "concentration background clips: element0={:#x} element1={:#x}",
+            self.clips[0], self.clips[1]
+        )));
     }
 
     unsafe fn refresh(&mut self, n: &Native, enabled: bool) {
@@ -672,67 +718,69 @@ impl Concentration {
             .and_then(|b| b.concentration.clone())
             .filter(|_| enabled && self.visible);
         let Some(image) = image else {
-            unsafe { self.restore(n) };
+            unsafe { self.release(n) };
             return;
         };
-        if self.clip == 0 {
+        if self.clips.iter().all(|clip| *clip == 0) {
             return;
         }
-        let current = match (&self.bound, &self.choice) {
+        let current = match (&self.bound_choice, &self.choice) {
             (Some(bound), Some(choice)) => Arc::ptr_eq(bound, choice),
             _ => false,
         };
-        if current && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0) {
+        if current && !self.bound.is_empty() {
             return;
         }
-        unsafe { self.restore(n) };
-        let handle = unsafe { ((self.clip + 512) as *const u32).read() };
-        let (Some(native_visible), Some(transform)) =
-            (unsafe { clip_visible(n, handle) }, unsafe {
-                read_transform(n, handle)
-            })
-        else {
-            return;
-        };
-        // Lowest priority keeps the replacement behind the lanes and the native
-        // concentration cover while still above the gameplay BGA layer.
-        match unsafe { Sprite::create(n, &image, 0) } {
-            Ok(sprite) => {
-                unsafe { apply_transform(n, sprite.node, &transform) };
-                if !unsafe { set_clip_visible(n, handle, 0) } {
-                    return;
+        let mut previous = std::mem::take(&mut self.bound);
+        for clip in self.clips.iter().copied().filter(|clip| *clip != 0) {
+            match unsafe { BoundClip::bind(n, clip, &image) } {
+                Ok(bound) => {
+                    // The node now points at the new texture; the old wrapper for
+                    // this clip can be dropped safely.
+                    previous.retain(|old| old.clip != clip);
+                    if !bound.restorable {
+                        event(Event::Diag(format!(
+                            "concentration clip {clip:#x} has no restorable archive/name"
+                        )));
+                    }
+                    self.bound.push(bound);
                 }
-                unsafe { visible(sprite.node, true) };
-                self.hidden = Some(NativeClip {
-                    handle,
-                    visible: native_visible,
-                });
-                self.sprite = Some(sprite);
-                self.bound = self.choice.clone();
-                event(Event::Surface("concentration background"));
+                Err(_) => {
+                    if let Some(position) = previous.iter().position(|old| old.clip == clip) {
+                        self.bound.push(previous.remove(position));
+                    }
+                    event(Event::Fault(
+                        "concentration texture bind failed; using stock this stage",
+                    ));
+                }
             }
-            Err(_) => event(Event::Fault(
-                "concentration background sprite creation failed; using stock",
-            )),
+        }
+        for old in previous {
+            unsafe { old.restore(n) };
+        }
+        if self.bound.is_empty() {
+            self.bound_choice = None;
+        } else {
+            self.bound_choice = self.choice.clone();
+            event(Event::Surface("concentration background"));
         }
     }
 
-    unsafe fn restore(&mut self, n: &Native) {
-        self.sprite = None;
-        self.bound = None;
-        if let Some(saved) = self.hidden.take() {
-            unsafe { set_clip_visible(n, saved.handle, saved.visible) };
+    unsafe fn release(&mut self, n: &Native) {
+        // Restorable clips return to their native archive texture. A clip without
+        // that information keeps our wrapper alive so the AFP node never points
+        // at unregistered art; it is invisible while the window is hidden.
+        let mut keep = Vec::new();
+        for bound in self.bound.drain(..) {
+            if bound.restorable {
+                unsafe { bound.restore(n) };
+                // Dropping now unregisters our texture after the native rebind.
+            } else {
+                keep.push(bound);
+            }
         }
-    }
-
-    fn released(&mut self, node: usize) -> Option<Texture> {
-        if let Some(sprite) = &mut self.sprite
-            && sprite.node == node
-        {
-            sprite.node = 0;
-            return sprite.texture.take();
-        }
-        None
+        self.bound = keep;
+        self.bound_choice = None;
     }
 }
 
@@ -777,14 +825,11 @@ impl Surfaces {
             },
             concentration: Concentration {
                 window: 0,
-                layer: 0,
-                layer_handle: 0,
-                clip: 0,
+                clips: [0, 0],
                 visible: false,
                 choice: None,
-                bound: None,
-                sprite: None,
-                hidden: None,
+                bound_choice: None,
+                bound: Vec::new(),
             },
         }
     }
@@ -792,8 +837,11 @@ impl Surfaces {
     fn leave_select(&mut self, scene: usize) {
         if self.scene == scene {
             if let Some(n) = NATIVE.get() {
-                // A gameplay overlay must never survive into song selection.
-                unsafe { self.concentration.restore(n) };
+                // A gameplay overlay must never survive into song selection, and
+                // the premium sprite is released with the selection sprite pool;
+                // restore the native nodes in both cases so no area turns black.
+                unsafe { self.concentration.release(n) };
+                unsafe { self.premium_area.restore(n) };
             }
             self.concentration.visible = false;
             self.concentration.choice = None;
@@ -810,7 +858,7 @@ impl Surfaces {
         if let Some(n) = NATIVE.get() {
             unsafe { self.frame_chara.restore(n, self.scene) };
             unsafe { self.premium_area.restore(n) };
-            unsafe { self.concentration.restore(n) };
+            unsafe { self.concentration.release(n) };
         }
         self.frame_chara.sprite = None;
         self.frame_chara.attempted = false;
@@ -884,7 +932,6 @@ fn observe_select(this: usize) {
                         .refresh(n, bundle, PREMIUM_AREA_ENABLED.load(Ordering::Acquire))
                 };
             }
-            unsafe { s.concentration.reconcile(n) };
         }
     });
 }
@@ -933,13 +980,6 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
         }
         let Some(mut s) = state() else { return };
         let n = NATIVE.get().unwrap();
-        // A missed concentration hide event must not leave our sprite visible
-        // over a menu, results screen or the selection movie layer.
-        unsafe { s.concentration.reconcile(n) };
-        unsafe {
-            s.concentration
-                .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
-        };
         if s.scene == 0 {
             return;
         }
@@ -1321,10 +1361,9 @@ unsafe extern "system" fn sprite_release(this: usize) {
     boundary(|| {
         if let Some(mut s) = state() {
             texture = s.frame_chara.released(this);
-            if let Some(released) = s.premium_area.released(this) {
-                texture = Some(released);
-            }
-            if let Some(released) = s.concentration.released(this) {
+            if let Some(n) = NATIVE.get()
+                && let Some(released) = unsafe { s.premium_area.released(n, this) }
+            {
                 texture = Some(released);
             }
             for c in &mut s.covers {

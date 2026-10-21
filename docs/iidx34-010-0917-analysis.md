@@ -167,17 +167,33 @@ authoritative.
 Implementation evidence: the runtime hooks
 `premium_area_ctor` (`0x6447a0`), `concentration_apply` (`0x6375c0`) and
 `concentration_show` (`0x6377f0`), plus the layer getter `0x638420`. Exact entry
-bytes are embedded in `src/profiles/iidx34-010-0917.json`. Replacement sprites
-are created at the native priority (premium) and at the lowest AFP priority
-(concentration, so lanes and the native cover stay on top), with the native
-position/origin/scale/color copied through AFP properties 4104/4123/4099/4106.
+bytes are embedded in `src/profiles/iidx34-010-0917.json`.
 
-Remaining unknowns: no in-game run. The premium base layer's image child
-transform is not proven when no customization sprite exists; the AFP group and
-the exact z-order relative to unknown UI layers still need a real-game check.
-The concentration replacement uses the lowest priority because the native clip
-depth cannot be queried through the analysed imports. Until those checks are
-done, keep the 1280x720 canvas.
+The premium replacement is an owned sprite created at the native priority and
+shown only while our pixels exist; its position/origin/scale/color are copied
+from the base layer or customization sprite through AFP properties
+4104/4123/4099/4106. Native visibility is saved and restored. A sprite pool is
+retired with its scene while the premium nodes are session-global, so the common
+sprite-release observer restores the native visibility immediately: the first
+in-game test showed that without this the premium area stayed black on the
+results screen.
+
+The concentration replacement does **not** create a sprite. Both candidate
+window elements (the default `concentration` view and the customized
+`concentration_uioff` view) are searched for `concentration_bg_set/bg`, and the
+found clips are rebound to our texture with the native dynamic-descriptor setter
+`0x329e50`. The clip keeps its own transform, parent layer and draw order. The
+native archive pointer (`clip +520`) and 256-byte name (`clip +0`) are saved and
+rebound through `0x329f30`, which is exactly the setter the game uses for its
+own customization background. The first in-game test used an owned sprite with
+copied properties instead; it appeared far to the right because `position` is
+relative to the window layer, not the screen, so that approach was discarded.
+
+Remaining unknowns: the default concentration view may not contain the same
+named background clip (the log records both element lookups). The AFP group and
+exact z-order of the premium sprite, and the base-layer child transform when no
+customization sprite exists, still need a real-game check. Until those checks
+are done, keep the 1280x720 canvas.
 
 ## Reproduction
 

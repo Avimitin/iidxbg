@@ -79,6 +79,7 @@ enum Event {
     Fault(&'static str),
     Invalidated,
     Surface(&'static str),
+    Diag(String),
 }
 
 fn wake_worker() {
@@ -703,6 +704,7 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                     Event::Fault(text) => log(&root, text),
                     Event::Invalidated => log(&root, "Graphics resources invalidated"),
                     Event::Surface(name) => log(&root, &format!("Custom {name} artwork ready")),
+                    Event::Diag(text) => log(&root, &text),
                 }
             }
             let generation = REQUEST.load(Ordering::Acquire);

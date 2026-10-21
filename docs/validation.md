@@ -470,3 +470,38 @@ recorded in [the 010-0917 evidence record](iidx34-010-0917-analysis.md#premium-a
 Release `target/release/iidxbg.dll` SHA-256:
 `46c1926494136e5808c5473f7313170222ab25c56785b9e0956d8d0241e9ab76`.
 The `dist` release artifacts were not refreshed by this change.
+
+### In-game feedback round 1 (2026-10-22)
+
+The user ran the plugin in the exact IIDX 34 / 010-0917 build. The premium-area
+image displayed correctly. Two defects appeared:
+
+- Concentration still showed stock art, and an owned sprite appeared far to the
+  right. The copied `position` is relative to the concentration window layer,
+  not the screen, so an owned sprite cannot be placed without the parent
+  transform.
+- The session-global premium nodes stayed hidden after the scene sprite pool
+  retired the replacement sprite, so the premium area was black on the results
+  screen.
+
+Fixes:
+
+- Concentration now rebinds the native `concentration_bg_set/bg` clip in both
+  window elements to the prepared texture, using the same dynamic-descriptor
+  setter as the game. The clip's transform/layer/draw order stay native. The
+  saved archive/name are restored through the native archive setter on hide,
+  disable and device invalidation.
+- Premium restores native visibility in the common sprite-release observer and
+  on selection exit, before the session-global nodes can be seen without their
+  replacement.
+- Diagnostic log lines record the premium node handles and both concentration
+  element lookups for the next round.
+
+Re-verified offline after the fixes: 27 tests, clippy, `cargo fmt --check`,
+release build, all four verifiers and private-process attachment in `native`,
+`chain` and `bad-tail` modes. No automated in-game run is possible here; the
+next visual check is with the user.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`496d44a35e0971f5042f5e4c6484f531300f253627f0939cf1250d520970022d`.
+The `dist` release artifacts were not refreshed by this change.

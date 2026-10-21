@@ -33,8 +33,8 @@ See [configuration](configuration.md) for examples and download count limits.
 | SUDDEN+ | Dedicated native bitmap sprite at priority 108, temporarily substituted for the upper artwork pair during native cover visual update. |
 | LIFT/lower cover | Independent bitmap for the lower pair at priority 108; native HIDDEN/LIFT selection, movement, clipping, alpha and visibility still apply. |
 | Target graph | Dedicated bitmap at priority 145, temporarily substituted at graph +64 during the native artwork helper, including default and animated selections. Native marker-derived clipping and score UI remain active. |
-| Premium area | **IIDX 34 / 010-0917 only.** The native `PremiumAreaBG` nodes are hidden and an owned sprite with the same AFP position/origin/scale/color is created at their priority, then shown only while our pixels exist. The game's own show/hide still owns the area. |
-| Concentration | **IIDX 34 / 010-0917 only.** The native `concentration_bg_set/bg` clip is hidden while the concentration window is shown and an owned low-priority sprite carries the replacement at the native canvas transform. The native show/hide flag and black cover stay authoritative. |
+| Premium area | **IIDX 34 / 010-0917 only.** The native `PremiumAreaBG` nodes are hidden and an owned sprite with the same AFP position/origin/scale/color is created at their priority, then shown only while our pixels exist. The game's own show/hide still owns the area; external sprite-pool retirement restores the native visibility. |
+| Concentration | **IIDX 34 / 010-0917 only.** The `concentration_bg_set/bg` clips in both concentration window elements are rebound to the prepared texture with the native dynamic-descriptor setter. The clip keeps its own transform, parent layer and draw order; the native show/hide and black cover stay authoritative, and stock art is restored from the saved archive/name. |
 
 Both static and animated cover choices use a dedicated replacement bitmap;
 the original animation is hidden while replacement is active. Cover mirror
@@ -62,12 +62,14 @@ visit after the worker publishes them. No network, file reads or image resize
 occurs in game/graphics callbacks.
 
 The premium-area replacement is frozen to the bundle that created it and is
-rebuilt when a new prepared bundle is published for the area; the concentration
-replacement is frozen per stage and follows the native window show/hide flag.
-Neither holds a native texture binding: the game's own clip/visibility state is
-saved and restored, so disabling or invalidating the device returns stock art.
-A missed native visibility update never leaves the stock node hidden while our
-sprite is gone; both are handled in the same callback.
+rebuilt when a new prepared bundle is published for the area. It saves and
+restores the native visibility; the common sprite-release observer restores it
+immediately when the scene sprite pool retires our sprite, because the native
+premium nodes are session-global and would otherwise stay black on the next
+screen. The concentration replacement rebinds both candidate window clips per
+stage, freezes that decision for the stage and follows the native window
+show/hide flag. It saves each clip's native archive/name and rebinds it through
+the native archive setter on hide, disable or device invalidation.
 
 The native descriptor sprite factory allocates from the retained sprite pool.
 AFP group 0 is selected temporarily and the caller's group restored. Each
@@ -100,11 +102,16 @@ with bilimani/spice hooks. Arena, battle and alternate layouts are not claimed
 as validated. Only the pre-existing results artwork was confirmed by the user
 on IIDX 33. No game DLL or game asset has been modified or committed.
 
-The two new surfaces are offline-validated only. Their native AFP group,
-draw priority relative to unknown UI layers, the base-layer child transform used
-when no premium customization sprite exists, and the exact on-screen rectangle
-still need in-game confirmation. Keep the shipped 1280x720 canvas until that
-check is done.
+The two new surfaces are being validated in-game. The first round confirmed the
+premium-area image and exposed two defects that are now addressed: an owned
+concentration sprite used a layer-relative position and appeared far to the
+right, so the implementation now rebinds the native clip instead; and the
+premium sprite pool retired with its scene while the native nodes stayed hidden,
+leaving the session-global premium area black on the results screen, so the
+release observer now restores native visibility. Remaining checks: the default
+concentration view may not contain the same named background clip (the log
+records both element lookups), and the premium base-layer path without a
+customization sprite is still unconfirmed. Keep the shipped 1280x720 canvas.
 
 
 Selection frame-character controls are a separate live exception to background
