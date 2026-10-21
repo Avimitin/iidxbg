@@ -649,6 +649,11 @@ impl BoundClip {
         if unsafe { set(clip, texture.descriptor()) } == 0 {
             return Err(Error::Native("concentration texture bind"));
         }
+        let node = unsafe { ((clip + 512) as *const u32).read() };
+        let visible = unsafe { clip_visible(n, node) };
+        event(Event::Diag(format!(
+            "concentration bind clip={clip:#x} node={node:#x} visible={visible:?} restorable={restorable}"
+        )));
         Ok(Self {
             clip,
             _texture: texture,
@@ -679,6 +684,7 @@ struct Concentration {
     layers: [usize; 2],
     clips: [usize; 2],
     fallback: [bool; 2],
+    names: [u8; 2],
     visible: bool,
     image: Option<Arc<Prepared>>,
     bound_image: Option<Arc<Prepared>>,
@@ -686,19 +692,23 @@ struct Concentration {
 }
 
 impl Concentration {
-    /// Resolve both concentration window elements. The native apply path uses
-    /// element 1; the default view may use element 0 and may keep its art on
-    /// the layer instead of a named child clip.
-    unsafe fn resolve(n: &Native, window: usize) -> ([usize; 2], [usize; 2], [bool; 2]) {
+    /// Both concentration window elements are probed for the customization
+    /// background group and for the default `subbg0_concentration` layer used by
+    /// the customize preview. The first hit per element is rebound; when neither
+    /// exists the layer root is used.
+    unsafe fn resolve(n: &Native, window: usize) -> ([usize; 2], [usize; 2], [bool; 2], [u8; 2]) {
         let mut layers = [0usize; 2];
         let mut clips = [0usize; 2];
         let mut fallback = [false; 2];
+        let mut names = [0u8; 2];
         if window == 0 {
-            return (layers, clips, fallback);
+            return (layers, clips, fallback, names);
         }
         let getter: unsafe extern "system" fn(usize, *mut u32) -> *const usize =
             unsafe { n.function("concentration_layer") };
         let find: FindClip = unsafe { n.function("find_clip") };
+        let candidates: [&std::ffi::CStr; 2] =
+            [c"concentration_bg_set/bg", c"subbg0_concentration"];
         for index in 0..2 {
             let mut key = index as u32;
             let entry = unsafe { getter(window + 8, &mut key) };
@@ -710,17 +720,22 @@ impl Concentration {
                 continue;
             }
             layers[index] = layer;
-            let clip = unsafe { find(layer, c"concentration_bg_set/bg".as_ptr().cast()) };
-            if clip != 0 {
-                clips[index] = clip;
-            } else {
+            for (name_index, candidate) in candidates.iter().enumerate() {
+                let clip = unsafe { find(layer, candidate.as_ptr().cast()) };
+                if clip != 0 {
+                    clips[index] = clip;
+                    names[index] = name_index as u8 + 1;
+                    break;
+                }
+            }
+            if clips[index] == 0 {
                 // CMovieClip layout at the layer root: name at +0, node id at
                 // +512 and archive at +520. layer +16 is the root clip object.
                 clips[index] = layer + 16;
                 fallback[index] = true;
             }
         }
-        (layers, clips, fallback)
+        (layers, clips, fallback, names)
     }
 
     unsafe fn observe(&mut self, n: &Native, window: usize) {
@@ -729,15 +744,17 @@ impl Concentration {
         }
         unsafe { self.release(n) };
         self.window = window;
-        (self.layers, self.clips, self.fallback) = unsafe { Self::resolve(n, window) };
+        (self.layers, self.clips, self.fallback, self.names) = unsafe { Self::resolve(n, window) };
         event(Event::Diag(format!(
-            "concentration background: index={} element0={:#x} layer={:#x} fallback={} element1={:#x} layer={:#x} fallback={}",
+            "concentration background: index={} element0={:#x} layer={:#x} name={} fallback={} element1={:#x} layer={:#x} name={} fallback={}",
             self.index,
             self.clips[0],
             self.layers[0],
+            self.names[0],
             self.fallback[0],
             self.clips[1],
             self.layers[1],
+            self.names[1],
             self.fallback[1],
         )));
     }
@@ -872,6 +889,7 @@ impl Surfaces {
                 layers: [0, 0],
                 clips: [0, 0],
                 fallback: [false, false],
+                names: [0, 0],
                 visible: false,
                 image: None,
                 bound_image: None,

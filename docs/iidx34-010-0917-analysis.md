@@ -195,10 +195,12 @@ while element 1 does, so the runtime now logs the customize index and both
 element visibilities on every native show.
 
 Remaining unknowns: which window element is visible in the user's default
-concentration view (the log now records it), and whether the default element's
-art lives on its layer root or on an unnamed child clip. The AFP group and exact
-z-order of the premium sprite still need confirmation. Until those checks are
-done, keep the 1280x720 canvas.
+concentration view (layer visibility reports 1 for both, so the log now records
+the customize index and the per-bind node state), and whether the default
+element's art lives on its layer root or on the `subbg0_concentration` clip that
+the customize preview uses (`data/graphic/customize/subbg0_concentration.jpg` is
+its 120x120 thumbnail). The AFP group and exact z-order of the premium sprite
+still need confirmation. Until those checks are done, keep the 1280x720 canvas.
 
 ## Reproduction
 

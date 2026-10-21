@@ -543,3 +543,31 @@ build passed.
 Release `target/release/iidxbg.dll` SHA-256:
 `7567615abebc15ef89bc0388321d021a89f07b1d351424a51c78b4de4d534f1d`.
 The `dist` release artifacts were not refreshed by this change.
+
+### In-game feedback round 3 (2026-10-22)
+
+The round-2 build was confirmed by its startup hash. New observations:
+
+- Premium still reverted in gameplay: the startup log shows the sprite being
+  released by the native pool at scene transitions, and the old code restored
+  the native nodes on selection exit. The replacement is now kept across
+  scenes; only a real pool release restores native visibility, and both native
+  nodes are hidden while our sprite is active.
+- `concentration background: index=112 ... name=...`: the customize index is
+  nonzero, element 0 has no `concentration_bg_set/bg`, element 1 does, and both
+  element layers report visibility 1, so visibility alone cannot identify the
+  displayed element. Binding both named clips had no visible effect.
+- The customize preview code builds `/data/graphic/customize/%s.jpg` from
+  `subbg0_concentration`, and `data/graphic/customize/subbg0_concentration.jpg`
+  exists in the game data. The background probe now also tries the
+  `subbg0_concentration` clip name in both elements before falling back to the
+  layer root.
+- Each bind now logs the clip handle, its AFP node id, node visibility and
+  whether a native archive/name could be saved.
+
+Offline re-verification: 27 tests, clippy, `cargo fmt --check` and the release
+build passed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`736af90aca92b8430e32a0c610b1745c9e794250ab7dc62aff4fe4c204ec7666`.
+The `dist` release artifacts were not refreshed by this change.
