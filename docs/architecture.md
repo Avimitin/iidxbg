@@ -87,8 +87,10 @@ The `0.2.1` performance pass tightened both sides of that pipeline:
 - GPU textures are reused per surface. `Texture::refresh` rewrites the pixels
   through `LockRect(DISCARD)` when the canvas size is unchanged; a new
   `CreateTexture` (and the associated ~8 ms first-draw hitch for 1920x1080) only
-  happens on the first use or a size change. Results, selection, premium and
-  concentration textures stay alive between visits and device loss drops them.
+  happens on the first use or a size change. Results, selection and premium
+  textures stay alive between visits and device loss drops them; concentration
+  updates its bound textures in place while the overlay stays bound and
+  re-creates them on the next show after a release.
 - The results illustration binds its clip once per visit (`Graphics::bound`)
   instead of re-running `find_clip`/`set_texture`/origin on every background
   callback.
