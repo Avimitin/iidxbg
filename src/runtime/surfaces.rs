@@ -539,6 +539,11 @@ impl PremiumArea {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, &image));
         if current && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0) {
+            // The game re-shows its own nodes on some transitions; keep them
+            // hidden every frame so the replacement cannot flash back to stock.
+            for saved in self.hidden.iter().flatten() {
+                unsafe { set_clip_visible(n, saved.handle, 0) };
+            }
             return;
         }
         let target = if self.custom != 0 {
@@ -626,7 +631,7 @@ impl PremiumArea {
 struct BoundClip {
     clip: usize,
     /// Kept alive so the AFP node never references unregistered art.
-    _texture: Texture,
+    texture: Texture,
     archive: usize,
     name: [u8; 256],
     restorable: bool,
@@ -661,7 +666,7 @@ impl BoundClip {
         )));
         Ok(Self {
             clip,
-            _texture: texture,
+            texture,
             archive,
             name,
             restorable,
@@ -832,6 +837,23 @@ impl Concentration {
         } else {
             self.bound_image = Some(image);
             event(Event::Surface("concentration background"));
+        }
+    }
+
+    /// The game occasionally re-applies its own archive texture while the
+    /// concentration overlay is up, which flashes the stock art. Rebinding our
+    /// already-uploaded texture on the frame path keeps it authoritative
+    /// without touching the GPU.
+    unsafe fn reassert(&self, n: &Native) {
+        if !self.visible || self.bound.is_empty() {
+            return;
+        }
+        let set: SetTexture = unsafe { n.function("set_texture") };
+        for bound in &self.bound {
+            let node = unsafe { ((bound.clip + 512) as *const u32).read() };
+            if node & 0x8000_0000 == 0 {
+                unsafe { set(bound.clip, bound.texture.descriptor()) };
+            }
         }
     }
 
@@ -1062,6 +1084,7 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
                     .refresh(n, snapshot(), PREMIUM_AREA_ENABLED.load(Ordering::Acquire))
             };
         }
+        unsafe { s.concentration.reassert(n) };
         if s.scene == 0 {
             return;
         }

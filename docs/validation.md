@@ -601,3 +601,26 @@ build passed.
 Release `target/release/iidxbg.dll` SHA-256:
 `14c1c8098fddd74a63c07c5fc2b16d6346304bec164d7993b84f55705c88fea6`.
 The `dist` release artifacts were not refreshed by this change.
+### In-game feedback round 5 (2026-10-22)
+
+The user confirmed the previous build (`14c1c8...`) replaces both backgrounds
+successfully, with occasional short flashes back to stock art that recover.
+That build uses the clip-binding concentration path (resolve after the native
+show, then bind); the later experiment that replaced concentration with an
+owned layer-transform sprite was reverted because it changed a working
+mechanism and would have hidden the native window elements.
+
+Flash mitigation added on top of the working build:
+
+- the premium refresh now re-hides both saved native nodes on every frame it is
+  called, so a native re-show during a transition cannot flash stock art;
+- the concentration frame path re-asserts the already-uploaded texture on the
+  bound clips, which counters the game occasionally re-applying its archive
+  texture without uploading anything again.
+
+Offline re-verification: 27 tests, clippy, `cargo fmt --check` and the release
+build passed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`2ee473bc7e0447000802f1c4b2a2d96389bdc62534887bab3b3db47d6344d5bc`.
+The `dist` release artifacts were not refreshed by this change.
