@@ -610,17 +610,19 @@ show, then bind); the later experiment that replaced concentration with an
 owned layer-transform sprite was reverted because it changed a working
 mechanism and would have hidden the native window elements.
 
-Flash mitigation added on top of the working build:
-
-- the premium refresh now re-hides both saved native nodes on every frame it is
-  called, so a native re-show during a transition cannot flash stock art;
-- the concentration frame path re-asserts the already-uploaded texture on the
-  bound clips, which counters the game occasionally re-applying its archive
-  texture without uploading anything again.
+An intermediate build re-hid the premium nodes and re-asserted the
+concentration texture on every frame. Code review of the native show path
+(`0x644b60`) showed that the game changes node *depth*, not visibility, so
+re-hiding every frame does not address the release gap and only adds AFP calls.
+That per-frame writing was removed: the frame path now only compares the
+prepared image pointer (no native calls in steady state), and all native
+visibility/texture writes happen on events (constructor, native show, publish,
+sprite release, device loss). The short stock flash remains possible in the gap
+between a native pool release and the next frame's sprite rebuild.
 
 Offline re-verification: 27 tests, clippy, `cargo fmt --check` and the release
 build passed.
 
 Release `target/release/iidxbg.dll` SHA-256:
-`2ee473bc7e0447000802f1c4b2a2d96389bdc62534887bab3b3db47d6344d5bc`.
+`85fdbbc589c703fafa98394e8d8669f03e8ffd1a2030200227ebb4d37a7c5467`.
 The `dist` release artifacts were not refreshed by this change.
