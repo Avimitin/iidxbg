@@ -382,6 +382,9 @@ unsafe extern "system" fn background_hook(this: usize, tick: u32) -> usize {
             }
         }
     });
+    // The session-global premium nodes can be visible on results; rebuild the
+    // replacement here if the scene sprite pool retired it.
+    surfaces::tick_premium();
     result
 }
 

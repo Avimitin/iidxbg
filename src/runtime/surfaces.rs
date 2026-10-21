@@ -495,6 +495,9 @@ struct PremiumArea {
     image: Option<Arc<Prepared>>,
     sprite: Option<Sprite>,
     hidden: [Option<NativeClip>; 2],
+    /// The native pool retired our sprite. Native visibility stays hidden and
+    /// the next draw/result hook rebuilds it; restoring here would flash stock.
+    pending: bool,
 }
 
 impl PremiumArea {
@@ -506,6 +509,7 @@ impl PremiumArea {
         self.sprite = None;
         self.hidden = [None, None];
         self.image = None;
+        self.pending = false;
         self.object = object;
         self.priority = priority;
         let (Some(base), Some(custom)) = (
@@ -549,7 +553,15 @@ impl PremiumArea {
         if target == 0 {
             return;
         }
-        unsafe { self.restore(n) };
+        if self.pending {
+            // The native nodes are already hidden from the previous sprite;
+            // keep them hidden and rebuild in place instead of restoring stock
+            // for a frame.
+            self.sprite = None;
+            self.image = None;
+        } else {
+            unsafe { self.restore(n) };
+        }
         let handle = unsafe { ((target + 528) as *const u32).read() };
         let Some(transform) = (unsafe { read_transform(n, handle) }) else {
             event(Event::Fault(
@@ -581,6 +593,7 @@ impl PremiumArea {
                 unsafe { visible(sprite.node, true) };
                 self.sprite = Some(sprite);
                 self.image = Some(image);
+                self.pending = false;
                 event(Event::Surface("premium area"));
             }
             Err(_) => event(Event::Fault(
@@ -593,26 +606,25 @@ impl PremiumArea {
         // Drop our sprite first so the native nodes never point at freed art.
         self.sprite = None;
         self.image = None;
+        self.pending = false;
         for saved in self.hidden.iter_mut().filter_map(Option::take) {
             unsafe { set_clip_visible(n, saved.handle, saved.visible) };
         }
     }
 
-    unsafe fn released(&mut self, n: &Native, node: usize) -> Option<Texture> {
+    unsafe fn released(&mut self, _n: &Native, node: usize) -> Option<Texture> {
         if let Some(sprite) = &mut self.sprite
             && sprite.node == node
         {
             sprite.node = 0;
             self.image = None;
             let texture = sprite.texture.take();
-            // The sprite pool is retired with its scene while the premium nodes
-            // are session-global. Restore native visibility immediately so the
-            // area cannot stay black on the next screen.
-            for saved in self.hidden.iter_mut().filter_map(Option::take) {
-                unsafe { set_clip_visible(n, saved.handle, saved.visible) };
-            }
+            // The scene sprite pool is retired while the premium nodes are
+            // session-global. Keep them hidden and let the next draw/result hook
+            // rebuild in place; restoring here would flash stock art for a frame.
+            self.pending = true;
             event(Event::Diag(
-                "premium area sprite released; native visibility restored".into(),
+                "premium area sprite released; waiting for rebuild".into(),
             ));
             return texture;
         }
@@ -626,7 +638,7 @@ impl PremiumArea {
 struct BoundClip {
     clip: usize,
     /// Kept alive so the AFP node never references unregistered art.
-    _texture: Texture,
+    texture: Texture,
     archive: usize,
     name: [u8; 256],
     restorable: bool,
@@ -661,7 +673,7 @@ impl BoundClip {
         )));
         Ok(Self {
             clip,
-            _texture: texture,
+            texture,
             archive,
             name,
             restorable,
@@ -784,6 +796,28 @@ impl Concentration {
         )));
     }
 
+    /// The game restores its own archive texture through `set_archive`. When
+    /// that happens on one of our bound clips while the overlay is visible,
+    /// immediately rebind our already-uploaded texture instead of waiting for a
+    /// new show event (this is the native "restore" the user asked about).
+    unsafe fn reassert_after_native(&self, n: &Native, clip: usize) {
+        if !self.visible || self.bound.is_empty() {
+            return;
+        }
+        let Some(bound) = self.bound.iter().find(|bound| bound.clip == clip) else {
+            return;
+        };
+        let node = unsafe { ((clip + 512) as *const u32).read() };
+        if node & 0x8000_0000 != 0 {
+            return;
+        }
+        let set: SetTexture = unsafe { n.function("set_texture") };
+        unsafe { set(clip, bound.texture.descriptor()) };
+        event(Event::Diag(format!(
+            "concentration texture reasserted after native restore clip={clip:#x}"
+        )));
+    }
+
     unsafe fn refresh(&mut self, n: &Native, enabled: bool) {
         let image = self.image.clone().filter(|_| enabled && self.visible);
         let Some(image) = image else {
@@ -891,6 +925,7 @@ impl Surfaces {
                 image: None,
                 sprite: None,
                 hidden: [None, None],
+                pending: false,
             },
             concentration: Concentration {
                 window: 0,
@@ -976,6 +1011,24 @@ unsafe extern "system" fn select_update_short(this: usize) -> usize {
     let result = unsafe { f(this) };
     observe_select(this);
     result
+}
+
+/// Rebuild the premium replacement if the native scene pool retired it. Kept
+/// separate from the per-frame movie path so results can also rebuild it.
+pub(super) fn tick_premium() {
+    boundary(|| {
+        if !can_render() {
+            return;
+        }
+        let Some(n) = NATIVE.get() else { return };
+        let Some(mut s) = state() else { return };
+        if s.premium_area.object != 0 {
+            unsafe {
+                s.premium_area
+                    .refresh(n, snapshot(), PREMIUM_AREA_ENABLED.load(Ordering::Acquire))
+            };
+        }
+    });
 }
 
 fn observe_select(this: usize) {
@@ -1554,6 +1607,23 @@ unsafe extern "system" fn concentration_show(window: usize, show: u8) -> usize {
     result
 }
 
+/// Native archive/name texture setter. The game uses it to restore its own
+/// customization background; rebind our texture immediately afterwards so the
+/// stock art does not stay on screen until the next show event.
+unsafe extern "system" fn set_archive_hook(clip: usize, archive: usize, name: *const u8) -> u8 {
+    let f: SetArchive = unsafe { original("set_archive") };
+    let result = unsafe { f(clip, archive, name) };
+    boundary(|| {
+        if !CONCENTRATION_ENABLED.load(Ordering::Acquire) || !can_render() {
+            return;
+        }
+        let Some(n) = NATIVE.get() else { return };
+        let Some(s) = state() else { return };
+        unsafe { s.concentration.reassert_after_native(n, clip) };
+    });
+    result
+}
+
 pub(super) fn attach(n: &Native) -> Result<()> {
     let mut hooks: Vec<(&'static str, *const ())> = vec![
         (
@@ -1592,6 +1662,9 @@ pub(super) fn attach(n: &Native) -> Result<()> {
     {
         hooks.push(("concentration_apply", concentration_apply as *const ()));
         hooks.push(("concentration_show", concentration_show as *const ()));
+        // Catch the native archive-texture restore that would otherwise flash
+        // stock art while the concentration overlay is visible.
+        hooks.push(("set_archive", set_archive_hook as *const ()));
     }
     let mut created = Vec::new();
     let mut trampolines = Vec::new();

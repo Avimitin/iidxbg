@@ -626,3 +626,31 @@ build passed.
 Release `target/release/iidxbg.dll` SHA-256:
 `85fdbbc589c703fafa98394e8d8669f03e8ffd1a2030200227ebb4d37a7c5467`.
 The `dist` release artifacts were not refreshed by this change.
+
+### In-game feedback round 6 (2026-10-22)
+
+Question from the user: instead of restoring stock art on a sprite release,
+can the native restore be hooked? Two different cases:
+
+- Premium: the "restore" was our own `sprite_release` handler, not a game call.
+  The native show path (`0x644b60`) only changes node depth, so there is no
+  function to hook. The release handler now keeps the native nodes hidden and
+  marks the replacement pending; the next draw hook (selection update, movie
+  dispatcher or the results background callback) rebuilds it in place. The
+  results background callback was added as a rebuild point so the session-global
+  area cannot stay black on the results screen.
+- Concentration: the game really does restore its archive texture through
+  `set_archive` (`0x329f30`). That entry is now hooked for this profile: after
+  the native call, if the clip belongs to the active concentration binding, the
+  already-uploaded texture is rebound immediately.
+
+The frame path now only compares the prepared image pointer; no AFP/D3D calls
+happen in steady state.
+
+Offline re-verification: 27 tests, clippy, `cargo fmt --check`, release build
+and private-process attachment in `native`, `chain` and `bad-tail` modes
+passed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`08891ae5b19e4caac30c9a2f4ba39586411f2f42b793655aeb73d3e3825c6948`.
+The `dist` release artifacts were not refreshed by this change.
