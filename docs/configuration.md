@@ -115,35 +115,49 @@ image's border and central cross to check the crop.
 
 ## Additional surfaces
 
-Set any of `surfaces.song_select`, `surfaces.sudden_plus`, `surfaces.lift`, or
-`surfaces.target_graph` to true. They default to false, including in older
-configurations that omit `[surfaces]`. Each option has comments in the shipped
-TOML. Each enabled surface chooses its image independently and has its own
-repeat history, source directory, Moebooru client and fit policy. `enabled = false` disables all surfaces
-at the next prepared decision/visit. See [background surfaces](background-surfaces.md)
-for behavior and the pending in-game checks.
+Set any of `surfaces.song_select`, `surfaces.sudden_plus`, `surfaces.lift`,
+`surfaces.target_graph`, `surfaces.premium_area`, or `surfaces.concentration` to
+true. They default to false, including in older configurations that omit
+`[surfaces]`. Each option has comments in the shipped TOML. Each enabled surface
+chooses its image independently and has its own repeat history, source
+directory, Moebooru client and fit policy. `enabled = false` disables all
+surfaces at the next prepared decision/visit. See
+[background surfaces](background-surfaces.md) for behavior and the pending
+in-game checks.
+
+`premium_area` and `concentration` are implemented only for the inspected
+**IIDX 34 / 010-0917** build; other exact-build profiles install their previous
+surface set and ignore the two switches. Their native display canvas is
+**1280x720**, so the worker decodes them directly to that canvas and leaves the
+game's own placement and upscaling in charge. `concentration` shares the
+prepared premium-area image while `[sources.concentration]` is empty; adding any
+field there gives concentrate mode an independent source.
 
 A selection-screen edit becomes visible on a **new selection visit after the
 next query has reloaded TOML and prepared the image**. It does not repaint the
 current visit. Leaving selection, results, or a tracked gameplay owner requests
 another query, subject to the existing backoff. `[image]` width/height remain
 the result canvas; each other surface decodes directly to its own shape from
-its original selected image: selection 1920x1080, covers 432x723, graph 432x870.
+its original selected image: selection 1920x1080, covers 432x723, graph 432x870,
+premium area 1280x720, concentration 1280x720.
 
 ## Independent source overrides
 
-The shipped config has active overrides for all five surfaces. Each starts in
+The shipped config has active overrides for six surfaces. Each starts in
 local mode with its own `iidxbg/<surface-folder>` and
 `iidxbg/downloads/<surface-folder>`. Folder names are `results`, `song-select`,
-`sudden-plus`, `lift`, and `target-graph`. Edit the corresponding override to
-change its mode or path; explicit overrides take precedence over global values.
-Results and song selection default to `contain`; SUDDEN+, LIFT and target graph
-default to `cover` for their narrow canvases. Any surface can use either mode.
-The additional background enable switches remain separate in `[surfaces]`.
+`sudden-plus`, `lift`, `target-graph`, and `premium-area`. Edit the
+corresponding override to change its mode or path; explicit overrides take
+precedence over global values. Results and song selection default to `contain`;
+SUDDEN+, LIFT and target graph default to `cover` for their narrow canvases. Any
+surface can use either mode. The additional background enable switches remain
+separate in `[surfaces]`. `[sources.concentration]` is intentionally empty, so
+concentrate mode reuses the premium-area image instead of querying twice.
 The following example illustrates alternative settings, not the shipped defaults.
 
 Use `[sources.results]`, `[sources.song_select]`, `[sources.sudden_plus]`,
-`[sources.lift]`, and `[sources.target_graph]`. Each accepts optional `source`,
+`[sources.lift]`, `[sources.target_graph]`, `[sources.premium_area]`, and
+`[sources.concentration]`. Each accepts optional `source`,
 `local_directory`, `recursive`, `fit`, and a nested `moebooru` section.
 Nested fields are `domain`, `tags`, `save_directory`, `page_max`,
 `timeout_seconds`, and `max_images`. Omitted values inherit the main config;
@@ -178,6 +192,14 @@ source = "remote"
 domain = "konachan.com"
 save_directory = 'iidxbg/downloads/graph'
 max_images = 100
+
+[sources.premium_area]
+source = "local"
+local_directory = 'iidxbg/premium-area'
+fit = "contain"
+
+# Empty: concentrate mode reuses the prepared premium-area image.
+[sources.concentration]
 ```
 
 The worker rereads and validates all settings for each scene request or retry.

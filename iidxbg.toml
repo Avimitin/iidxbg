@@ -104,6 +104,14 @@ lift = false
 # Artwork behind the target-score graph; bars, markers and text stay native.
 # Has an effect only when the game enables this graph component.
 target_graph = false
+# Premium-area background. Implemented for the inspected IIDX 34 / 010-0917
+# build only; other builds ignore this switch.
+# Native canvas is 1280x720; the game scales it itself.
+premium_area = false
+# Concentration-mode play background. Shares the premium-area image while the
+# concentration source section below stays empty; add an override there to use
+# a different source. Also IIDX 34 / 010-0917 only.
+concentration = false
 
 # Per-surface overrides are active by default. Edit each background below.
 # Local folders live under iidxbg; download folders under iidxbg/downloads.
@@ -168,3 +176,20 @@ save_directory = 'iidxbg/downloads/target-graph'
 # domain = "konachan.net"
 # tags = "rating:safe"
 # max_images = 0
+
+[sources.premium_area]
+source = "local"
+local_directory = 'iidxbg/premium-area'
+# Native canvas is 1280x720. "contain" keeps the whole image with a blurred
+# backdrop; "cover" fills the canvas and center-crops.
+fit = "contain"
+[sources.premium_area.moebooru]
+save_directory = 'iidxbg/downloads/premium-area'
+# domain = "konachan.net"
+# tags = "rating:safe"
+# max_images = 0
+
+# Empty by default: the concentration background reuses the prepared
+# premium-area image. Add any field below (for example local_directory) to
+# prepare an independent image for concentrate mode.
+[sources.concentration]

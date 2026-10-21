@@ -41,7 +41,7 @@ pub struct Provider {
 /// Independent repeat histories and HTTP policies; only the image worker owns this.
 pub struct Providers {
     config: Config,
-    providers: [Provider; 5],
+    providers: [Provider; Surface::COUNT],
 }
 
 impl Providers {
@@ -54,7 +54,7 @@ impl Providers {
             .into_iter()
             .map(|s| Provider::new(config.for_surface(s)))
             .collect::<Result<Vec<_>>>()?;
-        let providers = providers.try_into().ok().expect("five surface providers");
+        let providers = providers.try_into().ok().expect("one provider per surface");
         Ok(Self { config, providers })
     }
 
@@ -82,6 +82,12 @@ impl Providers {
         } else {
             Ok(None)
         }
+    }
+
+    /// Prepare even when the surface's own switch is off. Used once for the
+    /// premium-area image that a concentration-only configuration shares.
+    pub fn prepare_unchecked(&mut self, surface: Surface) -> Result<Prepared> {
+        self.providers[surface.index()].prepare()
     }
 
     pub fn cleanup(&self, surface: Surface) -> Result<usize> {
@@ -428,7 +434,9 @@ mod tests {
             .replace("song_select = false", "song_select = true")
             .replace("sudden_plus = false", "sudden_plus = true")
             .replace("lift = false", "lift = true")
-            .replace("target_graph = false", "target_graph = true");
+            .replace("target_graph = false", "target_graph = true")
+            .replace("premium_area = false", "premium_area = true")
+            .replace("concentration = false", "concentration = true");
         fs::write(&path, &text).unwrap();
         let mut bank = Providers::new(Config::load(&path).unwrap()).unwrap();
         for surface in Surface::ALL {

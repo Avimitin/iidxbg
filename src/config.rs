@@ -50,23 +50,31 @@ impl Default for SelectionOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
     Results,
     SongSelect,
     SuddenPlus,
     Lift,
     TargetGraph,
+    PremiumArea,
+    Concentration,
 }
 
 impl Surface {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Results,
         Self::SongSelect,
         Self::SuddenPlus,
         Self::Lift,
         Self::TargetGraph,
+        Self::PremiumArea,
+        Self::Concentration,
     ];
+    pub const COUNT: usize = Self::ALL.len();
+    /// Native canvas of the IIDX 34 premium-area and concentration backgrounds.
+    pub const NATIVE_WIDTH: u32 = 1280;
+    pub const NATIVE_HEIGHT: u32 = 720;
     pub fn index(self) -> usize {
         self as usize
     }
@@ -77,6 +85,8 @@ impl Surface {
             Self::SuddenPlus => "sudden_plus",
             Self::Lift => "lift",
             Self::TargetGraph => "target_graph",
+            Self::PremiumArea => "premium_area",
+            Self::Concentration => "concentration",
         }
     }
 }
@@ -89,6 +99,8 @@ pub struct Sources {
     pub sudden_plus: SourceOverride,
     pub lift: SourceOverride,
     pub target_graph: SourceOverride,
+    pub premium_area: SourceOverride,
+    pub concentration: SourceOverride,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -99,6 +111,23 @@ pub struct SourceOverride {
     pub recursive: Option<bool>,
     pub fit: Option<Fit>,
     pub moebooru: MoebooruOverride,
+}
+
+impl SourceOverride {
+    /// An all-default override inherits the shared premium-area image instead of
+    /// requesting an independent one.
+    pub fn is_empty(&self) -> bool {
+        self.source.is_none()
+            && self.local_directory.is_none()
+            && self.recursive.is_none()
+            && self.fit.is_none()
+            && self.moebooru.domain.is_none()
+            && self.moebooru.tags.is_none()
+            && self.moebooru.save_directory.is_none()
+            && self.moebooru.page_max.is_none()
+            && self.moebooru.timeout_seconds.is_none()
+            && self.moebooru.max_images.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -120,6 +149,8 @@ pub struct Surfaces {
     pub sudden_plus: bool,
     pub lift: bool,
     pub target_graph: bool,
+    pub premium_area: bool,
+    pub concentration: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -212,6 +243,8 @@ impl Config {
             &mut value.sources.sudden_plus,
             &mut value.sources.lift,
             &mut value.sources.target_graph,
+            &mut value.sources.premium_area,
+            &mut value.sources.concentration,
         ] {
             for path in [
                 &mut source.local_directory,
@@ -248,6 +281,8 @@ impl Config {
             Surface::SuddenPlus => &self.sources.sudden_plus,
             Surface::Lift => &self.sources.lift,
             Surface::TargetGraph => &self.sources.target_graph,
+            Surface::PremiumArea => &self.sources.premium_area,
+            Surface::Concentration => &self.sources.concentration,
         };
         c.sources = Sources::default();
         c.enabled &= match surface {
@@ -256,6 +291,8 @@ impl Config {
             Surface::SuddenPlus => self.surfaces.sudden_plus,
             Surface::Lift => self.surfaces.lift,
             Surface::TargetGraph => self.surfaces.target_graph,
+            Surface::PremiumArea => self.surfaces.premium_area,
+            Surface::Concentration => self.surfaces.concentration,
         };
         if let Some(v) = o.source {
             c.source = v;
@@ -301,8 +338,20 @@ impl Config {
                 c.image.width = 432;
                 c.image.height = 870;
             }
+            Surface::PremiumArea | Surface::Concentration => {
+                // Both native displays are 1280x720; keeping the canvas at the
+                // native size preserves the game's own placement and upscaling.
+                c.image.width = Surface::NATIVE_WIDTH;
+                c.image.height = Surface::NATIVE_HEIGHT;
+            }
         }
         c
+    }
+
+    /// The concentration background reuses the premium-area image while its own
+    /// `[sources.concentration]` section stays empty.
+    pub fn concentration_shares_premium(&self) -> bool {
+        self.sources.concentration.is_empty()
     }
 
     fn validate_base(&self) -> Result<()> {
@@ -479,7 +528,8 @@ mod tests {
 
     #[test]
     fn shipped_config_and_strict_limits() {
-        let mut c: Config = toml::from_str(include_str!("../iidxbg.toml")).unwrap();
+        let shipped = include_str!("../iidxbg.toml");
+        let mut c: Config = toml::from_str(shipped).unwrap();
         c.validate().unwrap();
         for (surface, folder) in [
             (Surface::Results, "results"),
@@ -487,6 +537,7 @@ mod tests {
             (Surface::SuddenPlus, "sudden-plus"),
             (Surface::Lift, "lift"),
             (Surface::TargetGraph, "target-graph"),
+            (Surface::PremiumArea, "premium-area"),
         ] {
             let resolved = c.for_surface(surface);
             assert_eq!(resolved.source, Source::Local);
@@ -499,14 +550,29 @@ mod tests {
                 PathBuf::from(format!("iidxbg/downloads/{folder}"))
             );
         }
+        assert!(c.concentration_shares_premium());
+        let concentration = c.for_surface(Surface::Concentration);
+        assert_eq!(concentration.local_directory, PathBuf::from("iidxbg"));
+        for surface in [Surface::PremiumArea, Surface::Concentration] {
+            let resolved = c.for_surface(surface);
+            assert_eq!(
+                (resolved.image.width, resolved.image.height),
+                (Surface::NATIVE_WIDTH, Surface::NATIVE_HEIGHT)
+            );
+        }
+        let separate: Config = toml::from_str(&shipped.replace(
+            "[sources.concentration]",
+            "[sources.concentration]\nlocal_directory = 'iidxbg/other'",
+        ))
+        .unwrap();
+        assert!(!separate.concentration_shares_premium());
+        assert_eq!(
+            separate.for_surface(Surface::Concentration).local_directory,
+            PathBuf::from("iidxbg/other")
+        );
         c.image.width = 0;
         assert!(c.validate().is_err());
-        assert!(
-            toml::from_str::<Config>(
-                &include_str!("../iidxbg.toml").replace("\"local\"", "\"typo\"")
-            )
-            .is_err()
-        );
+        assert!(toml::from_str::<Config>(&shipped.replace("\"local\"", "\"typo\"")).is_err());
     }
 
     #[test]

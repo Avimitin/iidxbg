@@ -49,6 +49,8 @@ static OWNER: AtomicU32 = AtomicU32::new(0);
 static REQUEST: AtomicU64 = AtomicU64::new(1);
 static WORKER: OnceLock<thread::Thread> = OnceLock::new();
 static HIDE_FRAME_CHARA: AtomicBool = AtomicBool::new(false);
+static PREMIUM_AREA_ENABLED: AtomicBool = AtomicBool::new(false);
+static CONCENTRATION_ENABLED: AtomicBool = AtomicBool::new(false);
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 static GPU: Mutex<Graphics> = Mutex::new(Graphics::new());
 static NATIVE: OnceLock<Native> = OnceLock::new();
@@ -666,7 +668,9 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
         HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
         let mut character = crate::character::LocalImage::default();
         let mut providers = Providers::new(config)?;
-        let mut images: [Option<Arc<Prepared>>; 5] = Default::default();
+        PREMIUM_AREA_ENABLED.store(providers.enabled(Surface::PremiumArea), Ordering::Release);
+        CONCENTRATION_ENABLED.store(providers.enabled(Surface::Concentration), Ordering::Release);
+        let mut images: [Option<Arc<Prepared>>; Surface::COUNT] = Default::default();
         // Keep lifecycle hooks active even while configured off, so subsequent
         // visits can request a reload and re-enable without reinstalling hooks.
         attach(&root)?;
@@ -713,9 +717,17 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                     reload_request(&root, &config_path, &mut providers, &mut character);
                 }
                 let mut failed = false;
+                // The concentration background reuses the premium-area image
+                // until its own source section gains an override.
+                let share = providers.config().concentration_shares_premium()
+                    && providers.enabled(Surface::Concentration);
                 for surface in Surface::ALL {
                     if STOP.load(Ordering::Acquire) {
                         break;
+                    }
+                    if share && surface == Surface::Concentration {
+                        images[surface.index()] = images[Surface::PremiumArea.index()].clone();
+                        continue;
                     }
                     // One accepted config snapshot governs this preparation batch.
                     // Maintenance failures do not discard a usable image or cause a redownload.
@@ -734,7 +746,17 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                         ),
                     };
                     cleanup(&providers);
-                    match providers.prepare(surface) {
+                    // A concentration-only configuration still prepares one
+                    // premium-area image to share.
+                    let prepared = if share
+                        && surface == Surface::PremiumArea
+                        && !providers.enabled(surface)
+                    {
+                        providers.prepare_unchecked(surface).map(Some)
+                    } else {
+                        providers.prepare(surface)
+                    };
+                    match prepared {
                         Ok(image) => {
                             if let Some(image) = &image {
                                 log(
@@ -759,9 +781,15 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                     // Publish each completed query so a local result does not wait
                     // behind downloads for other surfaces. Active visits stay frozen.
                     for item in Surface::ALL {
-                        if !providers.enabled(item) {
+                        let needed =
+                            providers.enabled(item) || (share && item == Surface::PremiumArea);
+                        if !needed {
                             images[item.index()] = None;
                         }
+                    }
+                    if share {
+                        images[Surface::Concentration.index()] =
+                            images[Surface::PremiumArea.index()].clone();
                     }
                     if generation == REQUEST.load(Ordering::Acquire)
                         && !STOP.load(Ordering::Acquire)
@@ -819,6 +847,8 @@ fn reload_request(
     }
     let config = providers.config();
     HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
+    PREMIUM_AREA_ENABLED.store(providers.enabled(Surface::PremiumArea), Ordering::Release);
+    CONCENTRATION_ENABLED.store(providers.enabled(Surface::Concentration), Ordering::Release);
     match character.refresh(config, root) {
         Ok(crate::character::Update::Unchanged) => {}
         Ok(crate::character::Update::Native) => surfaces::publish_character(None),

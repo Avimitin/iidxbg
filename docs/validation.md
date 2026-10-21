@@ -439,3 +439,34 @@ see [the evidence record](iidx34-010-0917-analysis.md).
 Local `target/release/iidxbg.dll` SHA-256:
 `4020f55a80896c57a50b732ef6ed58a570be80d73f8dc3dafefa7e102c799eea`.
 The `dist` release artifacts were not refreshed by this change.
+
+## Premium-area and concentration backgrounds (2026-10-22)
+
+Added two opt-in replacement targets for the IIDX 34 / 010-0917 profile:
+`surfaces.premium_area` and `surfaces.concentration`. Both use a 1280x720
+canvas and copy the native AFP transform; concentration reuses the prepared
+premium-area image while `[sources.concentration]` stays empty. Analysis is
+recorded in [the 010-0917 evidence record](iidx34-010-0917-analysis.md#premium-area-and-concentration-backgrounds-2026-10-22).
+
+- 27 Rust tests passed, including a new native-transform copy test and the
+  shipped-TOML sharing assertions. Clippy for all targets with warnings denied
+  and `cargo fmt --all --check` passed.
+- Optimized release build succeeded. `iidxbg-tool verify` accepted both
+  IIDX 34 profiles.
+- `verify-native.py` passed and now checks 38 embedded guards, the
+  `CPremiumArea +72` window, `CStageMain::Init` apply/show call sites, the
+  premium background construction path, the concentration layer lookup, the
+  native `{0,1080,1280,720}` clip and the three background strings.
+- `verify-surfaces.py` passed with the new premium/concentration anchors and
+  clip; `verify-frame-chara.py` and `verify-origin.py` still passed on the same
+  DLL.
+- Private-process attachment passed in `native`, `chain` and `bad-tail` modes
+  for the new profile, and in `native` mode for IIDX 34 / 20260917, which does
+  not install the two new hooks.
+- No game process was started and no in-game rendering was validated. The AFP
+  group, draw priority and the no-customization premium background path remain
+  unconfirmed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`46c1926494136e5808c5473f7313170222ab25c56785b9e0956d8d0241e9ab76`.
+The `dist` release artifacts were not refreshed by this change.

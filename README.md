@@ -56,10 +56,16 @@ target-score graph artwork. Enable their individual switches in `[surfaces]`
 in the commented `iidxbg.toml`; they default to false. These new hooks still
 need in-game testing on all supported builds. See [surface behavior and testing](docs/background-surfaces.md).
 
+The **premium-area background** and **concentration-mode background** are
+additional opt-in replacements for the inspected IIDX 34 / 010-0917 build.
+Both are prepared at their native 1280x720 size; concentration reuses the
+premium-area image unless `[sources.concentration]` adds an override. Other
+exact-build profiles ignore these two switches.
+
 Each background can use its own folder or supported Moebooru site through
 `[sources.<surface>]` overrides. `moebooru.max_images` optionally removes oldest
 managed downloads, and `fit = "contain"` fills borders with a heavily blurred
-copy of the image. The shipped config enables overrides for all five surfaces, using separate
+copy of the image. The shipped config enables overrides for six surfaces, using separate
 local folders under `iidxbg` and download folders under `iidxbg/downloads`.
 
 

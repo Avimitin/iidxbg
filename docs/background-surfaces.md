@@ -12,16 +12,19 @@ song_select = true
 sudden_plus = true
 lift = true
 target_graph = true
+premium_area = true
+concentration = true
 ```
 
-All four default to false. Results replacement continues to use `enabled`.
+All six default to false. Results replacement continues to use `enabled`.
 Each enabled surface independently selects an image. `[sources.<surface>]`
 overrides its local directory, source mode, Moebooru site/settings and fit;
 omitted values inherit the main config. The worker decodes each original image
-directly to the required canvas: selection 1920x1080, covers 432x723, and graph
-432x870. Results keep `[image]` width/height. These canvases do not change game
-resolution or cover height. SUDDEN+ and LIFT have separate CPU buffers.
-`contain` uses a blurred, stretched backdrop around its sharp foreground.
+directly to the required canvas: selection 1920x1080, covers 432x723, graph
+432x870, premium area and concentration 1280x720. Results keep `[image]`
+width/height. These canvases do not change game resolution or cover height.
+SUDDEN+ and LIFT have separate CPU buffers. `contain` uses a blurred, stretched
+backdrop around its sharp foreground.
 See [configuration](configuration.md) for examples and download count limits.
 
 | Surface | Integration |
@@ -30,6 +33,8 @@ See [configuration](configuration.md) for examples and download count limits.
 | SUDDEN+ | Dedicated native bitmap sprite at priority 108, temporarily substituted for the upper artwork pair during native cover visual update. |
 | LIFT/lower cover | Independent bitmap for the lower pair at priority 108; native HIDDEN/LIFT selection, movement, clipping, alpha and visibility still apply. |
 | Target graph | Dedicated bitmap at priority 145, temporarily substituted at graph +64 during the native artwork helper, including default and animated selections. Native marker-derived clipping and score UI remain active. |
+| Premium area | **IIDX 34 / 010-0917 only.** The native `PremiumAreaBG` nodes are hidden and an owned sprite with the same AFP position/origin/scale/color is created at their priority, then shown only while our pixels exist. The game's own show/hide still owns the area. |
+| Concentration | **IIDX 34 / 010-0917 only.** The native `concentration_bg_set/bg` clip is hidden while the concentration window is shown and an owned low-priority sprite carries the replacement at the native canvas transform. The native show/hide flag and black cover stay authoritative. |
 
 Both static and animated cover choices use a dedicated replacement bitmap;
 the original animation is hidden while replacement is active. Cover mirror
@@ -37,6 +42,12 @@ and flip operations are copied in native order. Numeric adjustment layers
 remain native. The graph uses the stock background tint (alpha 1, RGB 0.7).
 If its frame/marker is absent, the custom sprite stays hidden. Native graph
 mode guards still decide whether that component runs.
+
+The premium-area and concentration images are prepared on a 1280x720 canvas,
+the native size of both displays, so the game's own placement and upscaling
+remain in charge. `concentration` reuses the prepared premium-area image while
+`[sources.concentration]` stays empty; adding any field there gives it an
+independent source. No other source/settings keys are required.
 
 ## Ownership and reload
 
@@ -49,6 +60,14 @@ The worker rereads the file before the next query. Invalid edits preserve the
 last valid provider/config snapshot. Disabled decisions take effect at a new
 visit after the worker publishes them. No network, file reads or image resize
 occurs in game/graphics callbacks.
+
+The premium-area replacement is frozen to the bundle that created it and is
+rebuilt when a new prepared bundle is published for the area; the concentration
+replacement is frozen per stage and follows the native window show/hide flag.
+Neither holds a native texture binding: the game's own clip/visibility state is
+saved and restored, so disabling or invalidating the device returns stock art.
+A missed native visibility update never leaves the stock node hidden while our
+sprite is gone; both are handled in the same callback.
 
 The native descriptor sprite factory allocates from the retained sprite pool.
 AFP group 0 is selected temporarily and the caller's group restored. Each
@@ -80,6 +99,12 @@ customization, default/custom graph, device reset, repeated songs and coexistenc
 with bilimani/spice hooks. Arena, battle and alternate layouts are not claimed
 as validated. Only the pre-existing results artwork was confirmed by the user
 on IIDX 33. No game DLL or game asset has been modified or committed.
+
+The two new surfaces are offline-validated only. Their native AFP group,
+draw priority relative to unknown UI layers, the base-layer child transform used
+when no premium customization sprite exists, and the exact on-screen rectangle
+still need in-game confirmation. Keep the shipped 1280x720 canvas until that
+check is done.
 
 
 Selection frame-character controls are a separate live exception to background

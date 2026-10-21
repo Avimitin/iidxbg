@@ -88,7 +88,12 @@ PROFILES = {
                          120: 0x336920, 160: 0x336B20, 208: 0x336C10},
         "scene_vtable": 0xD52508,
         "scene_slots": {16: 0x8D7BB0, 17: 0x8D7FA0, 18: 0x8D8290},
-        "strings": {0xCC5F00: b"/0/music_sel_bg.mp4", 0xD95000: b"gr_line_max"},
+        "strings": {0xCC5F00: b"/0/music_sel_bg.mp4", 0xD95000: b"gr_line_max",
+                    0xC8DF78: b"sub_customize_bg%03d",
+                    0xC8DFE0: b"concentration_bg_set/bg",
+                    0xC8FA98: b"sub_monitor_base_bg"},
+        # 1280x720 native clip used by the new premium-area/concentration UI.
+        "clips": {0xD8BBF0: (0, 1080, 1280, 720)},
         "calls": [
             (0x5FCE20, 0x27, [0x5F2F90, 0x5F3100]),
             (0x9362B0, 0x41, [0x936300]),
@@ -102,6 +107,11 @@ PROFILES = {
             (0xA20B30, 0x220, [0xA20D50, 0x860960, 0x8F59E0, 0x818F20]),
             (0xA1FD30, 0x250, [0x81EA30, 0x8F59E0, 0x334ED0]),
             (0xA20E60, 0xE0, [0xA1FD30]),
+            # Premium-area and concentration backgrounds (2026-10-22).
+            (0x8F8F80, 0xEEE, [0x9AF8C0, 0x6375C0]),
+            (0x6447A0, 0x17E, [0x9C1EE0, 0x334D10]),
+            (0x994650, 0x17B3, [0x6447A0]),
+            (0x6375C0, 0x1CB, [0x638420]),
         ],
         "stubs": {0x5F30B0: "32c0c3", 0x5F30C0: "c20000",
                   0x5F30D0: "c20000", 0x5F30E0: "c20000",
@@ -145,6 +155,9 @@ def verify(path):
             require(actual == base + target, f"Vtable mismatch at {table:#x}, slot {slot}")
     for rva, expected in profile["strings"].items():
         require(pe.get_string_at_rva(rva) == expected, f"String mismatch at {rva:#x}")
+    for rva, expected in profile.get("clips", {}).items():
+        actual = struct.unpack("<4i", pe.get_data(rva, 16))
+        require(actual == expected, f"Clip rectangle mismatch at {rva:#x}")
 
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     md.detail = True

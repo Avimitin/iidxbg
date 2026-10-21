@@ -164,7 +164,30 @@ def main():
                         and i.operands[0].mem.base == capstone.x86.X86_REG_RIP
                         and i.address + i.size + i.operands[0].mem.disp == base + 0xC66CA8
                         for i in function(rva)), "AFP texture binding import changed")
+        # Premium-area and concentration backgrounds.
+        require(pe.get_data(0x8F94D8, 4) == bytes.fromhex("4c8b7148"),
+                "Concentration window no longer at CPremiumArea +72")
+        for site, target in [(0x8F9470, 0x9AF8C0), (0x8F94BF, 0x9AF8C0),
+                             (0x8F9523, 0x860680), (0x8F952E, 0x6375C0),
+                             (0x8F9570, 0x9AEEF0), (0x994AEB, 0x6447A0)]:
+            callsite(site, target)
+        require(pe.get_data(0x9ACF00, 14) == bytes.fromhex("488b49484885c90f85e3a8c8ffc3"),
+                "Concentration show wrapper changed")
+        require({0x9C1EE0, 0x334D10} <= calls(0x6447A0),
+                "Premium-area background construction path changed")
+        require(0x638420 in calls(0x6375C0),
+                "Concentration clip lookup path changed")
+        require(struct.unpack("<4i", pe.get_data(0xD8BBF0, 16)) == (0, 1080, 1280, 720),
+                "Native 1280x720 background clip changed")
+        for rva, text in [(0xC8DF78, b"sub_customize_bg%03d"),
+                          (0xC8DFE0, b"concentration_bg_set/bg"),
+                          (0xC8FA98, b"sub_monitor_base_bg")]:
+            require(pe.get_data(rva, len(text)) == text, "Background string changed")
+        require(profile["surface_data"]["premium_area_base"] == 16
+                and profile["surface_data"]["premium_area_custom"] == 24,
+                "PremiumAreaBG field offsets changed")
         print("PASS: IIDX 34 / 010-0917 RTTI, scene ownership, binding, texture lifecycle")
+        print("PASS: premium-area and concentration background construction/show paths")
         print("Offline evidence only: no hook, GPU upload, layout or frame-time validation.")
         return
 

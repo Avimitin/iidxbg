@@ -51,12 +51,13 @@ guarded pixel-origin helper with mocked AFP imports (`pefile`/`unicorn` required
 It verifies float argument passing, linked clip traversal and property writes.
 
 The additional [background-surface investigation](background-surfaces.md)
-covers song selection, SUDDEN+, LIFT and the gameplay target graph.
-`python scripts/verify-surfaces.py path/to/bm2dx.dll` reproduces its static
-anchors using `pefile` and `capstone`. These checks now cover the optional runtime surface hooks. Build-specific evidence is recorded for
+covers song selection, SUDDEN+, LIFT, the gameplay target graph, the premium
+area and concentrate mode. `python scripts/verify-surfaces.py path/to/bm2dx.dll`
+reproduces its static anchors using `pefile` and `capstone`. These checks now cover the optional runtime surface hooks. Build-specific evidence is recorded for
 [33 / 20260812](iidx33-background-surfaces.md),
 [34 / 20260917](iidx34-background-surfaces.md) and
-[34 / 010-0917](iidx34-010-0917-analysis.md).
+[34 / 010-0917](iidx34-010-0917-analysis.md). The premium-area and concentrate
+hooks exist only in the last profile.
 
 `scripts/package.ps1` copies the built DLL, repository-default commented TOML, licenses,
 and diagnostic image into `dist/iidxbg`, then produces a ZIP. It preserves an

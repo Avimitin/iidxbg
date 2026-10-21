@@ -59,14 +59,20 @@ have only offline validation.
 ## Additional surface adapters
 
 `runtime/surfaces.rs` uses the same exact-build profile and CPU image worker.
-The worker publishes an immutable bundle of optional selection/cover/graph crops
-only when its request generation is still current. Each scene/component freezes
-its bundle; GPU resets keep those CPU pixels. Five worker-owned providers have
-independent settings and repeat histories, inheriting global defaults through
-`Config::for_surface`. At each request, a complete validated config and replacement clients are built
+The worker publishes an immutable bundle of optional selection/cover/graph and
+premium-area/concentration crops only when its request generation is still
+current. Each scene/component freezes its bundle; GPU resets keep those CPU
+pixels. Seven worker-owned providers have independent settings and repeat
+histories, inheriting global defaults through `Config::for_surface`. At each
+request, a complete validated config and replacement clients are built
 before swapping; one snapshot governs the whole surface preparation batch. Each completed query publishes
 its image with the other cached images; a failure retains only its own previous
 image. SUDDEN+ and LIFT no longer share a bitmap. New switches default off.
+The concentration background shares the prepared premium-area image while its
+source override stays empty; a concentration-only configuration still prepares
+that one shared image. Premium-area and concentration analysis is embedded only
+in the inspected IIDX 34 / 010-0917 profile; other exact-build profiles install
+their previous hook set and ignore the two switches.
 
 Cleanup is a separate worker effect before/after each enabled query. It prunes
 only downloader-named regular files in the effective Moebooru save directory,

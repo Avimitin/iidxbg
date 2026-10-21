@@ -35,7 +35,11 @@
     "cover_init": 9394976,
     "graph_parent_reset": 10650848,
     "graph_storage_release": 10613408,
-    "layer_dimensions": 3330896
+    "layer_dimensions": 3330896,
+    "premium_area_ctor": 6571936,
+    "concentration_apply": 6518208,
+    "concentration_show": 6518768,
+    "concentration_layer": 6521888
   },
   "guards": [
     {
@@ -173,6 +177,22 @@
     {
       "rva": 3330896,
       "hex": "4885d2743b48895c2408574883ec6049"
+    },
+    {
+      "rva": 6571936,
+      "hex": "4c894c242041564883ec4048c7442430"
+    },
+    {
+      "rva": 6518208,
+      "hex": "40565741564883ec4048c7442420feff"
+    },
+    {
+      "rva": 6518768,
+      "hex": "488bc45541544156488bec4881ec8000"
+    },
+    {
+      "rva": 6521888,
+      "hex": "4883ec284c8bd248b825232284e49cf2"
     }
   ],
   "tables": [
@@ -209,6 +229,8 @@
     "layer_vtable": 14248112,
     "afp_property_get": 13003816,
     "afp_property_set": 13003792,
-    "select_frame_priority": 188
+    "select_frame_priority": 188,
+    "premium_area_base": 16,
+    "premium_area_custom": 24
   }
 }

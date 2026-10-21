@@ -8,6 +8,8 @@ pub(super) struct Bundle {
     upper: Option<Arc<Prepared>>,
     lower: Option<Arc<Prepared>>,
     graph: Option<Arc<Prepared>>,
+    premium_area: Option<Arc<Prepared>>,
+    concentration: Option<Arc<Prepared>>,
 }
 
 static LATEST: Mutex<Option<Arc<Bundle>>> = Mutex::new(None);
@@ -16,12 +18,14 @@ static STATE: Mutex<Surfaces> = Mutex::new(Surfaces::new());
 static HOOKS: OnceLock<Vec<(&'static str, usize)>> = OnceLock::new();
 
 /// Worker publishes already decoded, independently sourced surface canvases.
-pub(super) fn publish(images: &[Option<Arc<Prepared>>; 5]) {
+pub(super) fn publish(images: &[Option<Arc<Prepared>>; Surface::COUNT]) {
     *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Bundle {
-        select: images[1].clone(),
-        upper: images[2].clone(),
-        lower: images[3].clone(),
-        graph: images[4].clone(),
+        select: images[Surface::SongSelect.index()].clone(),
+        upper: images[Surface::SuddenPlus.index()].clone(),
+        lower: images[Surface::Lift.index()].clone(),
+        graph: images[Surface::TargetGraph.index()].clone(),
+        premium_area: images[Surface::PremiumArea.index()].clone(),
+        concentration: images[Surface::Concentration.index()].clone(),
     }));
 }
 
@@ -376,6 +380,362 @@ struct Graph {
     stock_hidden: bool,
 }
 
+/// Native visibility captured before substituting a background.
+#[derive(Clone, Copy)]
+struct NativeClip {
+    handle: u32,
+    visible: u8,
+}
+
+#[derive(Clone, Copy)]
+struct Transform {
+    position: [f32; 2],
+    origin: [f32; 2],
+    scale: [f32; 2],
+    color: [f32; 4],
+}
+
+unsafe fn clip_visible(n: &Native, handle: u32) -> Option<u8> {
+    let get: PropertyGet = unsafe {
+        std::mem::transmute(field(
+            n.base + n.profile.surface_data["afp_property_get"],
+            0,
+        ))
+    };
+    let mut visible = 0u8;
+    (unsafe { get(handle, 4103, &mut visible) } >= 0).then_some(visible)
+}
+
+unsafe fn set_clip_visible(n: &Native, handle: u32, value: u8) -> bool {
+    let set: PropertySet = unsafe {
+        std::mem::transmute(field(
+            n.base + n.profile.surface_data["afp_property_set"],
+            0,
+        ))
+    };
+    if unsafe { set(handle, 4103, usize::from(value)) } < 0 {
+        return false;
+    }
+    unsafe { set(handle, 4126, 1) };
+    true
+}
+
+/// Read the native canvas transform so the replacement keeps the game's own
+/// placement and upscaling instead of rebuilding a guessed screen rectangle.
+unsafe fn read_transform(n: &Native, handle: u32) -> Option<Transform> {
+    let get: PropertyGet = unsafe {
+        std::mem::transmute(field(
+            n.base + n.profile.surface_data["afp_property_get"],
+            0,
+        ))
+    };
+    let mut transform = Transform {
+        position: [0.0; 2],
+        origin: [0.0; 2],
+        scale: [1.0; 2],
+        color: [1.0; 4],
+    };
+    for (property, out) in [
+        (4104, &mut transform.position[..]),
+        (4123, &mut transform.origin[..]),
+        (4099, &mut transform.scale[..]),
+        (4106, &mut transform.color[..]),
+    ] {
+        if unsafe { get(handle, property, out.as_mut_ptr().cast()) } < 0
+            || !out.iter().all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+        {
+            return None;
+        }
+    }
+    // A zero scale never renders the stock art either; treat it as unusable
+    // geometry instead of silently creating an invisible replacement.
+    if transform.scale[0] == 0.0 || transform.scale[1] == 0.0 {
+        return None;
+    }
+    Some(transform)
+}
+
+unsafe fn apply_transform(n: &Native, sprite: usize, transform: &Transform) {
+    let set_origin: Position = unsafe { n.function("sprite_origin") };
+    let set_position: Position = unsafe { n.function("sprite_position") };
+    let set_scale: Scale = unsafe { n.function("sprite_scale") };
+    let set_color: Alpha = unsafe { n.function("sprite_alpha") };
+    unsafe {
+        set_origin(
+            sprite,
+            transform.origin[0].round() as i32,
+            transform.origin[1].round() as i32,
+        );
+        set_position(
+            sprite,
+            transform.position[0].round() as i32,
+            transform.position[1].round() as i32,
+        );
+        set_scale(sprite, transform.scale[0], transform.scale[1]);
+        set_color(
+            sprite,
+            transform.color[3],
+            transform.color[0],
+            transform.color[1],
+            transform.color[2],
+        );
+    }
+}
+
+/// Premium-area background (`PremiumAreaBG`). The game creates its background
+/// nodes once per session, so the replacement is rebuilt when the prepared
+/// image changes or the native visible node switches between the base layer and
+/// the customization sprite.
+#[derive(Default)]
+struct PremiumArea {
+    object: usize,
+    base: usize,
+    custom: usize,
+    priority: u32,
+    choice: Option<Arc<Bundle>>,
+    sprite: Option<Sprite>,
+    hidden: [Option<NativeClip>; 2],
+}
+
+impl PremiumArea {
+    unsafe fn observe(&mut self, n: &Native, object: usize, priority: u32) {
+        if self.object == object {
+            return;
+        }
+        // A new owner replaces our previous nodes without dereferencing them.
+        self.sprite = None;
+        self.hidden = [None, None];
+        self.choice = None;
+        self.object = object;
+        self.priority = priority;
+        let (Some(base), Some(custom)) = (
+            n.profile.surface_data.get("premium_area_base"),
+            n.profile.surface_data.get("premium_area_custom"),
+        ) else {
+            return;
+        };
+        self.base = unsafe { field(object, *base) };
+        self.custom = unsafe { field(object, *custom) };
+    }
+
+    unsafe fn refresh(&mut self, n: &Native, bundle: Option<Arc<Bundle>>, enabled: bool) {
+        let image = bundle
+            .as_ref()
+            .and_then(|b| b.premium_area.as_ref())
+            .filter(|_| enabled);
+        let Some(image) = image else {
+            unsafe { self.restore(n) };
+            return;
+        };
+        if self.object == 0 {
+            return;
+        }
+        if let Some(current) = &self.choice
+            && bundle.as_ref().is_some_and(|b| Arc::ptr_eq(current, b))
+            && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0)
+        {
+            return;
+        }
+        let target = if self.custom != 0 {
+            self.custom
+        } else {
+            self.base
+        };
+        if target == 0 {
+            return;
+        }
+        unsafe { self.restore(n) };
+        let handle = unsafe { ((target + 528) as *const u32).read() };
+        let (Some(native_visible), Some(transform)) =
+            (unsafe { clip_visible(n, handle) }, unsafe {
+                read_transform(n, handle)
+            })
+        else {
+            return;
+        };
+        match unsafe { Sprite::create(n, image, self.priority) } {
+            Ok(sprite) => {
+                unsafe { apply_transform(n, sprite.node, &transform) };
+                if !unsafe { set_clip_visible(n, handle, 0) } {
+                    return;
+                }
+                unsafe { visible(sprite.node, true) };
+                self.hidden[if self.custom != 0 { 1 } else { 0 }] = Some(NativeClip {
+                    handle,
+                    visible: native_visible,
+                });
+                self.sprite = Some(sprite);
+                self.choice = bundle;
+                event(Event::Surface("premium area"));
+            }
+            Err(_) => event(Event::Fault(
+                "premium area sprite creation failed; using stock",
+            )),
+        }
+    }
+
+    unsafe fn restore(&mut self, n: &Native) {
+        // Drop our sprite first so the native nodes never point at freed art.
+        self.sprite = None;
+        self.choice = None;
+        for saved in self.hidden.iter_mut().filter_map(Option::take) {
+            unsafe { set_clip_visible(n, saved.handle, saved.visible) };
+        }
+    }
+
+    fn released(&mut self, node: usize) -> Option<Texture> {
+        if let Some(sprite) = &mut self.sprite
+            && sprite.node == node
+        {
+            sprite.node = 0;
+            self.choice = None;
+            return sprite.texture.take();
+        }
+        None
+    }
+}
+
+/// Concentration-mode gameplay background. The native clip lives in the
+/// session-global concentration window and is shown/hidden per stage, so the
+/// replacement follows the native show flag rather than the scene lifetime.
+#[derive(Default)]
+struct Concentration {
+    window: usize,
+    layer: usize,
+    layer_handle: u32,
+    clip: usize,
+    visible: bool,
+    choice: Option<Arc<Bundle>>,
+    bound: Option<Arc<Bundle>>,
+    sprite: Option<Sprite>,
+    hidden: Option<NativeClip>,
+}
+
+impl Concentration {
+    /// Resolve the window layer that owns the concentration background. The
+    /// native apply/hide paths use layer index 1 and the named clip below it.
+    unsafe fn clip(n: &Native, window: usize) -> Option<(usize, usize)> {
+        if window == 0 {
+            return None;
+        }
+        let getter: unsafe extern "system" fn(usize, *mut u32) -> *const usize =
+            unsafe { n.function("concentration_layer") };
+        let mut index = 1u32;
+        let slot = unsafe { getter(window + 8, &mut index) };
+        if slot.is_null() {
+            return None;
+        }
+        let layer = unsafe { *slot };
+        if layer == 0 {
+            return None;
+        }
+        let find: FindClip = unsafe { n.function("find_clip") };
+        let clip = unsafe { find(layer, c"concentration_bg_set/bg".as_ptr().cast()) };
+        (clip != 0).then_some((layer, clip))
+    }
+
+    unsafe fn observe(&mut self, n: &Native, window: usize) {
+        if self.window == window && self.clip != 0 {
+            return;
+        }
+        self.sprite = None;
+        self.hidden = None;
+        self.window = window;
+        self.layer = 0;
+        self.layer_handle = 0;
+        self.clip = 0;
+        let Some((layer, clip)) = (unsafe { Self::clip(n, window) }) else {
+            return;
+        };
+        self.layer = layer;
+        self.layer_handle = unsafe { ((layer + 528) as *const u32).read() };
+        self.clip = clip;
+    }
+
+    /// A missed native hide event must not leave our sprite over another scene.
+    unsafe fn reconcile(&mut self, n: &Native) {
+        if self.sprite.is_none() || self.layer_handle == 0 {
+            return;
+        }
+        if let Some(visible) = unsafe { clip_visible(n, self.layer_handle) }
+            && visible == 0
+        {
+            unsafe { self.restore(n) };
+            self.visible = false;
+        }
+    }
+
+    unsafe fn refresh(&mut self, n: &Native, enabled: bool) {
+        let image = self
+            .choice
+            .as_ref()
+            .and_then(|b| b.concentration.clone())
+            .filter(|_| enabled && self.visible);
+        let Some(image) = image else {
+            unsafe { self.restore(n) };
+            return;
+        };
+        if self.clip == 0 {
+            return;
+        }
+        let current = match (&self.bound, &self.choice) {
+            (Some(bound), Some(choice)) => Arc::ptr_eq(bound, choice),
+            _ => false,
+        };
+        if current && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0) {
+            return;
+        }
+        unsafe { self.restore(n) };
+        let handle = unsafe { ((self.clip + 512) as *const u32).read() };
+        let (Some(native_visible), Some(transform)) =
+            (unsafe { clip_visible(n, handle) }, unsafe {
+                read_transform(n, handle)
+            })
+        else {
+            return;
+        };
+        // Lowest priority keeps the replacement behind the lanes and the native
+        // concentration cover while still above the gameplay BGA layer.
+        match unsafe { Sprite::create(n, &image, 0) } {
+            Ok(sprite) => {
+                unsafe { apply_transform(n, sprite.node, &transform) };
+                if !unsafe { set_clip_visible(n, handle, 0) } {
+                    return;
+                }
+                unsafe { visible(sprite.node, true) };
+                self.hidden = Some(NativeClip {
+                    handle,
+                    visible: native_visible,
+                });
+                self.sprite = Some(sprite);
+                self.bound = self.choice.clone();
+                event(Event::Surface("concentration background"));
+            }
+            Err(_) => event(Event::Fault(
+                "concentration background sprite creation failed; using stock",
+            )),
+        }
+    }
+
+    unsafe fn restore(&mut self, n: &Native) {
+        self.sprite = None;
+        self.bound = None;
+        if let Some(saved) = self.hidden.take() {
+            unsafe { set_clip_visible(n, saved.handle, saved.visible) };
+        }
+    }
+
+    fn released(&mut self, node: usize) -> Option<Texture> {
+        if let Some(sprite) = &mut self.sprite
+            && sprite.node == node
+        {
+            sprite.node = 0;
+            return sprite.texture.take();
+        }
+        None
+    }
+}
+
 struct Surfaces {
     scene: usize,
     select_choice: Option<Arc<Bundle>>,
@@ -385,6 +745,8 @@ struct Surfaces {
     covers: Vec<Cover>,
     graphs: Vec<Graph>,
     frame_chara: FrameChara,
+    premium_area: PremiumArea,
+    concentration: Concentration,
 }
 
 impl Surfaces {
@@ -404,11 +766,37 @@ impl Surfaces {
                 layer: 0,
                 attempted: false,
             },
+            premium_area: PremiumArea {
+                object: 0,
+                base: 0,
+                custom: 0,
+                priority: 0,
+                choice: None,
+                sprite: None,
+                hidden: [None, None],
+            },
+            concentration: Concentration {
+                window: 0,
+                layer: 0,
+                layer_handle: 0,
+                clip: 0,
+                visible: false,
+                choice: None,
+                bound: None,
+                sprite: None,
+                hidden: None,
+            },
         }
     }
 
     fn leave_select(&mut self, scene: usize) {
         if self.scene == scene {
+            if let Some(n) = NATIVE.get() {
+                // A gameplay overlay must never survive into song selection.
+                unsafe { self.concentration.restore(n) };
+            }
+            self.concentration.visible = false;
+            self.concentration.choice = None;
             self.frame_chara = FrameChara::default();
             self.scene = 0;
             self.select_texture = None;
@@ -421,6 +809,8 @@ impl Surfaces {
     unsafe fn invalidate(&mut self) {
         if let Some(n) = NATIVE.get() {
             unsafe { self.frame_chara.restore(n, self.scene) };
+            unsafe { self.premium_area.restore(n) };
+            unsafe { self.concentration.restore(n) };
         }
         self.frame_chara.sprite = None;
         self.frame_chara.attempted = false;
@@ -470,6 +860,7 @@ unsafe extern "system" fn select_update_short(this: usize) -> usize {
 fn observe_select(this: usize) {
     boundary(|| {
         let n = NATIVE.get().unwrap();
+        let bundle = snapshot();
         if can_render()
             && unsafe { field(this, 0) } == n.base + n.profile.surface_data["select_vtable"]
             && let Some(mut s) = state()
@@ -487,6 +878,13 @@ fn observe_select(this: usize) {
                 s.frame_chara
                     .update(n, this, HIDE_FRAME_CHARA.load(Ordering::Acquire))
             };
+            if s.premium_area.object != 0 {
+                unsafe {
+                    s.premium_area
+                        .refresh(n, bundle, PREMIUM_AREA_ENABLED.load(Ordering::Acquire))
+                };
+            }
+            unsafe { s.concentration.reconcile(n) };
         }
     });
 }
@@ -534,10 +932,17 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
             return;
         }
         let Some(mut s) = state() else { return };
+        let n = NATIVE.get().unwrap();
+        // A missed concentration hide event must not leave our sprite visible
+        // over a menu, results screen or the selection movie layer.
+        unsafe { s.concentration.reconcile(n) };
+        unsafe {
+            s.concentration
+                .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
+        };
         if s.scene == 0 {
             return;
         }
-        let n = NATIVE.get().unwrap();
         if !s.select_attempted {
             s.select_attempted = true;
             if let Some(image) = s.select_choice.as_ref().and_then(|b| b.select.as_ref()) {
@@ -916,6 +1321,12 @@ unsafe extern "system" fn sprite_release(this: usize) {
     boundary(|| {
         if let Some(mut s) = state() {
             texture = s.frame_chara.released(this);
+            if let Some(released) = s.premium_area.released(this) {
+                texture = Some(released);
+            }
+            if let Some(released) = s.concentration.released(this) {
+                texture = Some(released);
+            }
             for c in &mut s.covers {
                 for sprite in [&mut c.upper, &mut c.lower].into_iter().flatten() {
                     if sprite.node == this {
@@ -941,8 +1352,80 @@ unsafe extern "system" fn sprite_release(this: usize) {
     drop(texture);
 }
 
+/// Premium-area background constructor. Records the native base layer and the
+/// optional customization sprite, then installs the replacement if one is ready.
+unsafe extern "system" fn premium_area_ctor(
+    this: usize,
+    priority: i32,
+    customize: u8,
+    shared: *mut usize,
+) -> usize {
+    let f: unsafe extern "system" fn(usize, i32, u8, *mut usize) -> usize =
+        unsafe { original("premium_area_ctor") };
+    let result = unsafe { f(this, priority, customize, shared) };
+    boundary(|| {
+        let Some(n) = NATIVE.get() else { return };
+        let Some(mut s) = state() else { return };
+        unsafe { s.premium_area.observe(n, this, priority.max(0) as u32) };
+        if can_render() {
+            unsafe {
+                s.premium_area
+                    .refresh(n, snapshot(), PREMIUM_AREA_ENABLED.load(Ordering::Acquire))
+            };
+        }
+    });
+    result
+}
+
+/// Applied once per stage by the gameplay initializer. The clip lookup mirrors
+/// the native customization binding at the same layer index.
+unsafe extern "system" fn concentration_apply(window: usize, index: u32) {
+    let f: unsafe extern "system" fn(usize, u32) = unsafe { original("concentration_apply") };
+    unsafe { f(window, index) };
+    boundary(|| {
+        if !can_render() {
+            return;
+        }
+        let Some(n) = NATIVE.get() else { return };
+        let Some(mut s) = state() else { return };
+        unsafe { s.concentration.observe(n, window) };
+        s.concentration.choice = snapshot();
+        unsafe {
+            s.concentration
+                .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
+        };
+    });
+}
+
+/// Native concentration show/hide. The replacement follows this flag so it can
+/// never outlive the gameplay overlay that owns the background.
+unsafe extern "system" fn concentration_show(window: usize, show: u8) -> usize {
+    let f: unsafe extern "system" fn(usize, u8) -> usize =
+        unsafe { original("concentration_show") };
+    let result = unsafe { f(window, show) };
+    boundary(|| {
+        if !can_render() {
+            return;
+        }
+        let Some(n) = NATIVE.get() else { return };
+        let Some(mut s) = state() else { return };
+        if show != 0 {
+            unsafe { s.concentration.observe(n, window) };
+            if s.concentration.choice.is_none() {
+                s.concentration.choice = snapshot();
+            }
+        }
+        s.concentration.visible = show != 0;
+        unsafe {
+            s.concentration
+                .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
+        };
+    });
+    result
+}
+
 pub(super) fn attach(n: &Native) -> Result<()> {
-    let hooks = [
+    let mut hooks: Vec<(&'static str, *const ())> = vec![
         (
             "select_update",
             if n.profile.surface_data["select_update_extended"] != 0 {
@@ -964,6 +1447,22 @@ pub(super) fn attach(n: &Native) -> Result<()> {
         ("graph_storage_release", graph_storage_release as *const ()),
         ("sprite_release", sprite_release as *const ()),
     ];
+    // The premium-area and concentration backgrounds are implemented only for
+    // builds whose analysis provides every required entry and layout offset.
+    // Other exact-build profiles keep the previous surface set.
+    if n.profile.rvas.contains_key("premium_area_ctor")
+        && n.profile.surface_data.contains_key("premium_area_base")
+        && n.profile.surface_data.contains_key("premium_area_custom")
+    {
+        hooks.push(("premium_area_ctor", premium_area_ctor as *const ()));
+    }
+    if n.profile.rvas.contains_key("concentration_apply")
+        && n.profile.rvas.contains_key("concentration_show")
+        && n.profile.rvas.contains_key("concentration_layer")
+    {
+        hooks.push(("concentration_apply", concentration_apply as *const ()));
+        hooks.push(("concentration_show", concentration_show as *const ()));
+    }
     let mut created = Vec::new();
     let mut trampolines = Vec::new();
     for (name, detour) in hooks {
@@ -1173,5 +1672,42 @@ mod character_tests {
         );
         MOCK.with(|m| m.borrow_mut().fail = true);
         assert!(!unsafe { FrameChara::place_sprite(&n, 123, 42, 456) });
+    }
+
+    #[test]
+    fn background_transform_is_read_from_native_properties_not_rebuilt() {
+        MOCK.with(|m| *m.borrow_mut() = Mock::default());
+        let imports = [get as *const () as usize];
+        let mut profile = profile::supported().into_iter().next().unwrap();
+        profile
+            .surface_data
+            .insert("afp_property_get".into(), imports.as_ptr() as usize);
+        for (name, ptr) in [
+            ("sprite_position", position as *const ()),
+            ("sprite_origin", position as *const ()),
+            ("sprite_scale", scale as *const ()),
+            ("sprite_alpha", color as *const ()),
+        ] {
+            profile.rvas.insert(name.into(), ptr as usize);
+        }
+        let n = Native { base: 0, profile };
+        let transform = unsafe { read_transform(&n, 42) }.expect("native transform");
+        assert_eq!(transform.position, [100.0, 200.0]);
+        assert_eq!(transform.origin, [960.0, 540.0]);
+        assert_eq!(transform.scale, [1.5, 2.0]);
+        assert_eq!(transform.color, [0.7, 0.8, 0.9, 0.5]);
+        unsafe { apply_transform(&n, 7, &transform) };
+        assert_eq!(
+            MOCK.with(|m| m.borrow().geometry.clone()),
+            vec![
+                vec![960.0, 540.0],
+                vec![100.0, 200.0],
+                vec![1.5, 2.0],
+                vec![0.5, 0.7, 0.8, 0.9]
+            ]
+        );
+        // Non-finite native geometry must keep stock art instead of panicking.
+        MOCK.with(|m| m.borrow_mut().fail = true);
+        assert!(unsafe { read_transform(&n, 42) }.is_none());
     }
 }

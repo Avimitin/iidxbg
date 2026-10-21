@@ -125,6 +125,60 @@ native entries; it never treats the wrapper/descriptor as a D3D texture.
 the two zero-valued optional flags. Those offsets were checked in the new
 function bodies.
 
+## Premium-area and concentration backgrounds (2026-10-22)
+
+Two more replacement targets were analysed on this same input. Both are
+user-customizable in the game itself (`txt_cus_premium_bg`,
+`txt_cus_concentration`, `sub_customize_bg%03d`), and both native displays are
+**1280x720** canvases inside the 1920x1080 UI. The plugin therefore prepares
+1280x720 pixels and copies the native transform instead of rebuilding a screen
+rectangle.
+
+| RVA / data | Evidence |
+|---|---|
+| `0x9af8c0` | Lazy `CPremiumArea` accessor; the object is session-global and starts `sub_1809ab950` once |
+| `0x9ab200` | `CPremiumArea` constructor; `PremiumAreaMainControl` shared_ptr at +56, concentration window at +72 after init |
+| `0x994650` | `PremiumAreaMainControl` constructor; creates `PremiumAreaBG` at priority **58** through `0x6447a0`, stores it at control +240 |
+| `0x6447a0` | `PremiumAreaBG(bg, i32 priority, u8 customize, shared_ptr*)`: base UI layer at **+16**, customization sprite at **+24** |
+| `0x9c1ee0` / `0x9c1e30` | Premium UI layer creation: position `(0,1080)`, clip `{0,1080,1280,720}`, anchor flag 1, 48-byte transform `0x80000001` |
+| `0xd8bbf0` | Clip constant `{0, 1080, 1280, 720}` (x, y, width, height) |
+| `0x334d10` | Customization sprite factory (archive/name, priority, visible); the premium path uses position `(0,1080)` |
+| `0x6375c0` | Concentration apply `(window, u32 customize_index)`; called from `CStageMain::Init` at `0x8f952e` with `window = CPremiumArea +72`, index from `0x860680` |
+| `0x638420` | Window layer lookup `(window + 8, &index)`; returns the shared_ptr slot; the native caller uses index **1** |
+| `0x81ea30` | Existing named-clip lookup; resolves `concentration_bg_set/bg` in that layer |
+| `0x6377f0` | Concentration show/hide `(window, u8 show)`; reached through `0x9acf00` from `0x9aeef0` and `CStageMain::Init` at `0x8f9570` |
+| `0x860680` | Customization index getter used by the concentration apply call |
+| `0xc8df90`.. | `concentration`, `concentration_uioff`, `concentration_bg_set/bg`, `concentration_bg_set/black_cover`, `sub_customize_bg%03d`, `sub_monitor_base_bg` |
+
+The premium background is created once per game session by the lazy
+`CPremiumArea`, so its replacement is frozen to the bundle that created it and
+rebuilt when the worker publishes a new bundle, when the visible node switches
+between the base layer and the customization sprite, or after device loss.
+The native base/custom visibility is saved and restored; the plugin never
+rebinds a native clip texture, because the layer's root clip keeps the name
+`/` and no archive pointer that would allow restoring it.
+
+The concentration clip lives in the session-global window and is applied per
+stage. The replacement is frozen per stage and follows the native show flag
+(`0x6377f0`), so it cannot outlive the gameplay overlay. The native
+`concentration_bg_set/black_cover` and its brightness handling remain
+authoritative.
+
+Implementation evidence: the runtime hooks
+`premium_area_ctor` (`0x6447a0`), `concentration_apply` (`0x6375c0`) and
+`concentration_show` (`0x6377f0`), plus the layer getter `0x638420`. Exact entry
+bytes are embedded in `src/profiles/iidx34-010-0917.json`. Replacement sprites
+are created at the native priority (premium) and at the lowest AFP priority
+(concentration, so lanes and the native cover stay on top), with the native
+position/origin/scale/color copied through AFP properties 4104/4123/4099/4106.
+
+Remaining unknowns: no in-game run. The premium base layer's image child
+transform is not proven when no customization sprite exists; the AFP group and
+the exact z-order relative to unknown UI layers still need a real-game check.
+The concentration replacement uses the lowest priority because the native clip
+depth cannot be queried through the analysed imports. Until those checks are
+done, keep the 1280x720 canvas.
+
 ## Reproduction
 
 ```powershell
