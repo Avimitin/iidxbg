@@ -179,16 +179,20 @@ stayed black on the results screen; the second test showed that restoring on
 scene exit instead made gameplay fall back to stock, so the replacement now
 survives scene changes and only a real pool release reverts it.
 
-The concentration mode is a full-screen static image on the secondary display
-plus a "CONCENTRATION MODE" line. Its named `concentration_bg_set/bg` clip has
-no AFP node in the default view (`node=0xffffffee`), so binding a texture to it
-is a silent no-op, and element 0 contains neither that clip nor
-`subbg0_concentration`. The runtime therefore uses the premium mechanism for
-concentration as well: it creates an owned sprite at the window priority (6,
-the id passed to the layer factory), copies the element layer's
-position/origin/scale/color, hides both native elements and shows the sprite.
-An earlier attempt to copy the *clip's* transform instead of the layer's put the
-image far to the right because clip positions are layer-relative.
+The concentration replacement does **not** create a sprite. Both window
+elements (the default `concentration` view and the customized
+`concentration_uioff` view) are examined. The `concentration_bg_set/bg` clip is
+rebound to our texture with the native dynamic-descriptor setter `0x329e50`;
+when an element has no such clip, its layer root clip (`layer +16`) is rebound
+instead, because the default view may keep its art on the layer itself. The
+clip keeps its own transform, parent layer and draw order. The native archive
+pointer (`clip +520`) and 256-byte name (`clip +0`) are saved and rebound
+through `0x329f30` when available. The first in-game test used an owned sprite
+with copied properties instead; it appeared far to the right because `position`
+is relative to the window layer, not the screen, so that approach was
+discarded. The second test showed that element 0 has no named background clip
+while element 1 does, so the runtime now logs the customize index and both
+element visibilities on every native show.
 
 Remaining unknowns: which window element is visible in the user's default
 concentration view (layer visibility reports 1 for both, so the log now records
