@@ -644,12 +644,17 @@ impl BoundClip {
             && name.contains(&0)
             && name[0].is_ascii_graphic()
             && name.iter().all(|b| (0x20..0x7f).contains(b) || *b == 0);
+        let node = unsafe { ((clip + 512) as *const u32).read() };
+        if node & 0x8000_0000 != 0 {
+            // The named clip exists in the layout but has no AFP node yet; a
+            // texture bind would silently do nothing.
+            return Err(Error::Native("concentration clip has no AFP node"));
+        }
         let texture = unsafe { Texture::upload(n, image) }?;
         let set: SetTexture = unsafe { n.function("set_texture") };
         if unsafe { set(clip, texture.descriptor()) } == 0 {
             return Err(Error::Native("concentration texture bind"));
         }
-        let node = unsafe { ((clip + 512) as *const u32).read() };
         let visible = unsafe { clip_visible(n, node) };
         event(Event::Diag(format!(
             "concentration bind clip={clip:#x} node={node:#x} visible={visible:?} restorable={restorable}"
@@ -738,8 +743,12 @@ impl Concentration {
         (layers, clips, fallback, names)
     }
 
-    unsafe fn observe(&mut self, n: &Native, window: usize) {
-        if self.window == window && (self.clips[0] != 0 || self.clips[1] != 0) {
+    /// Resolve the window elements again. The native show/hide path creates and
+    /// retires the clip nodes, so a clip found while the window was hidden can
+    /// have no AFP node by the time it is shown. Resolving immediately before a
+    /// bind keeps the clip entry and its node consistent.
+    unsafe fn observe(&mut self, n: &Native, window: usize, force: bool) {
+        if !force && self.window == window && (self.clips[0] != 0 || self.clips[1] != 0) {
             return;
         }
         unsafe { self.release(n) };
@@ -1044,6 +1053,15 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
         }
         let Some(mut s) = state() else { return };
         let n = NATIVE.get().unwrap();
+        // The native sprite pool retires our premium sprite at scene changes
+        // while the native nodes are session-global. Recreate it here so the
+        // premium background also survives loading and gameplay.
+        if s.premium_area.object != 0 {
+            unsafe {
+                s.premium_area
+                    .refresh(n, snapshot(), PREMIUM_AREA_ENABLED.load(Ordering::Acquire))
+            };
+        }
         if s.scene == 0 {
             return;
         }
@@ -1491,13 +1509,18 @@ unsafe extern "system" fn concentration_apply(window: usize, index: u32) {
         }
         let Some(n) = NATIVE.get() else { return };
         let Some(mut s) = state() else { return };
+        s.concentration.window = window;
         s.concentration.index = index;
-        unsafe { s.concentration.observe(n, window) };
         s.concentration.image = snapshot().and_then(|bundle| bundle.concentration.clone());
-        unsafe {
-            s.concentration
-                .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
-        };
+        // The native apply runs while the window may still be hidden; the clip
+        // nodes are (re)created by the show path, so resolve there.
+        if s.concentration.visible {
+            unsafe { s.concentration.observe(n, window, true) };
+            unsafe {
+                s.concentration
+                    .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
+            };
+        }
     });
 }
 
@@ -1514,7 +1537,9 @@ unsafe extern "system" fn concentration_show(window: usize, show: u8) -> usize {
         let Some(n) = NATIVE.get() else { return };
         let Some(mut s) = state() else { return };
         if show != 0 {
-            unsafe { s.concentration.observe(n, window) };
+            // Resolve after the native show so the clip entries point at the
+            // freshly created AFP nodes.
+            unsafe { s.concentration.observe(n, window, true) };
             if s.concentration.image.is_none() {
                 s.concentration.image = snapshot().and_then(|bundle| bundle.concentration.clone());
             }

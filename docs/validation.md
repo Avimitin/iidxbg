@@ -571,3 +571,33 @@ build passed.
 Release `target/release/iidxbg.dll` SHA-256:
 `736af90aca92b8430e32a0c610b1745c9e794250ab7dc62aff4fe4c204ec7666`.
 The `dist` release artifacts were not refreshed by this change.
+
+### In-game feedback round 4 (2026-10-22)
+
+The round-3 build was confirmed by its startup hash; the visible behaviour did
+not change. The bind diagnostics added in round 3 gave the decisive data:
+
+- `concentration bind clip=0x18c3de690 node=0xffffffee` - the named
+  `concentration_bg_set/bg` clip has **no AFP node**, so the game never bound a
+  background there and our setters silently do nothing.
+- `element0 ... name=0 fallback=true` - neither `concentration_bg_set/bg` nor
+  `subbg0_concentration` exists in the default window element.
+- The premium sprite is still released by the native pool at scene changes
+  (three release lines), so it reverted after song selection.
+
+Changes:
+
+- Concentration now re-resolves the window elements **after** the native show
+  callback, when the clip nodes exist, instead of caching entries found while
+  the window was hidden. A clip without an AFP node is rejected instead of
+  bound silently.
+- The premium replacement is now also ensured from the movie dispatcher, so
+  the session-global premium background is recreated after the pool release
+  during loading/gameplay.
+
+Offline re-verification: 27 tests, clippy, `cargo fmt --check` and the release
+build passed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`14c1c8098fddd74a63c07c5fc2b16d6346304bec164d7993b84f55705c88fea6`.
+The `dist` release artifacts were not refreshed by this change.
