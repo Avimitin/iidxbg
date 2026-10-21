@@ -170,30 +170,35 @@ Implementation evidence: the runtime hooks
 bytes are embedded in `src/profiles/iidx34-010-0917.json`.
 
 The premium replacement is an owned sprite created at the native priority and
-shown only while our pixels exist; its position/origin/scale/color are copied
-from the base layer or customization sprite through AFP properties
-4104/4123/4099/4106. Native visibility is saved and restored. A sprite pool is
-retired with its scene while the premium nodes are session-global, so the common
-sprite-release observer restores the native visibility immediately: the first
-in-game test showed that without this the premium area stayed black on the
-results screen.
+kept across scenes. Both the base layer and the customization sprite are hidden
+while it is active, and their saved visibility is restored when the sprite is
+actually released by the native pool. Its position/origin/scale/color are copied
+from the visible node through AFP properties 4104/4123/4099/4106. The first
+in-game test showed that without the release-path restore the premium area
+stayed black on the results screen; the second test showed that restoring on
+scene exit instead made gameplay fall back to stock, so the replacement now
+survives scene changes and only a real pool release reverts it.
 
-The concentration replacement does **not** create a sprite. Both candidate
-window elements (the default `concentration` view and the customized
-`concentration_uioff` view) are searched for `concentration_bg_set/bg`, and the
-found clips are rebound to our texture with the native dynamic-descriptor setter
-`0x329e50`. The clip keeps its own transform, parent layer and draw order. The
-native archive pointer (`clip +520`) and 256-byte name (`clip +0`) are saved and
-rebound through `0x329f30`, which is exactly the setter the game uses for its
-own customization background. The first in-game test used an owned sprite with
-copied properties instead; it appeared far to the right because `position` is
-relative to the window layer, not the screen, so that approach was discarded.
+The concentration replacement does **not** create a sprite. Both window
+elements (the default `concentration` view and the customized
+`concentration_uioff` view) are examined. The `concentration_bg_set/bg` clip is
+rebound to our texture with the native dynamic-descriptor setter `0x329e50`;
+when an element has no such clip, its layer root clip (`layer +16`) is rebound
+instead, because the default view may keep its art on the layer itself. The
+clip keeps its own transform, parent layer and draw order. The native archive
+pointer (`clip +520`) and 256-byte name (`clip +0`) are saved and rebound
+through `0x329f30` when available. The first in-game test used an owned sprite
+with copied properties instead; it appeared far to the right because `position`
+is relative to the window layer, not the screen, so that approach was
+discarded. The second test showed that element 0 has no named background clip
+while element 1 does, so the runtime now logs the customize index and both
+element visibilities on every native show.
 
-Remaining unknowns: the default concentration view may not contain the same
-named background clip (the log records both element lookups). The AFP group and
-exact z-order of the premium sprite, and the base-layer child transform when no
-customization sprite exists, still need a real-game check. Until those checks
-are done, keep the 1280x720 canvas.
+Remaining unknowns: which window element is visible in the user's default
+concentration view (the log now records it), and whether the default element's
+art lives on its layer root or on an unnamed child clip. The AFP group and exact
+z-order of the premium sprite still need confirmation. Until those checks are
+done, keep the 1280x720 canvas.
 
 ## Reproduction
 

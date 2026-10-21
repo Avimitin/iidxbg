@@ -483,16 +483,16 @@ unsafe fn apply_transform(n: &Native, sprite: usize, transform: &Transform) {
 }
 
 /// Premium-area background (`PremiumAreaBG`). The game creates its background
-/// nodes once per session, so the replacement is rebuilt when the prepared
-/// image changes or the native visible node switches between the base layer and
-/// the customization sprite.
+/// nodes once per session, so the replacement is rebuilt only when the prepared
+/// image itself changes or the native visible node switches between the base
+/// layer and the customization sprite.
 #[derive(Default)]
 struct PremiumArea {
     object: usize,
     base: usize,
     custom: usize,
     priority: u32,
-    choice: Option<Arc<Bundle>>,
+    image: Option<Arc<Prepared>>,
     sprite: Option<Sprite>,
     hidden: [Option<NativeClip>; 2],
 }
@@ -505,7 +505,7 @@ impl PremiumArea {
         // A new owner replaces our previous nodes without dereferencing them.
         self.sprite = None;
         self.hidden = [None, None];
-        self.choice = None;
+        self.image = None;
         self.object = object;
         self.priority = priority;
         let (Some(base), Some(custom)) = (
@@ -525,7 +525,7 @@ impl PremiumArea {
     unsafe fn refresh(&mut self, n: &Native, bundle: Option<Arc<Bundle>>, enabled: bool) {
         let image = bundle
             .as_ref()
-            .and_then(|b| b.premium_area.as_ref())
+            .and_then(|b| b.premium_area.clone())
             .filter(|_| enabled);
         let Some(image) = image else {
             unsafe { self.restore(n) };
@@ -534,10 +534,11 @@ impl PremiumArea {
         if self.object == 0 {
             return;
         }
-        if let Some(current) = &self.choice
-            && bundle.as_ref().is_some_and(|b| Arc::ptr_eq(current, b))
-            && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0)
-        {
+        let current = self
+            .image
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &image));
+        if current && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0) {
             return;
         }
         let target = if self.custom != 0 {
@@ -550,26 +551,36 @@ impl PremiumArea {
         }
         unsafe { self.restore(n) };
         let handle = unsafe { ((target + 528) as *const u32).read() };
-        let (Some(native_visible), Some(transform)) =
-            (unsafe { clip_visible(n, handle) }, unsafe {
-                read_transform(n, handle)
-            })
-        else {
+        let Some(transform) = (unsafe { read_transform(n, handle) }) else {
+            event(Event::Fault(
+                "premium area native transform unavailable; using stock",
+            ));
             return;
         };
-        match unsafe { Sprite::create(n, image, self.priority) } {
+        match unsafe { Sprite::create(n, &image, self.priority) } {
             Ok(sprite) => {
                 unsafe { apply_transform(n, sprite.node, &transform) };
-                if !unsafe { set_clip_visible(n, handle, 0) } {
-                    return;
+                // Both native nodes occupy the same 1280x720 priority-58 area.
+                // Hide each one independently so a later native show cannot
+                // replace our sprite, and restore the saved state on release.
+                for (slot, node) in [self.base, self.custom].into_iter().enumerate() {
+                    if node == 0 {
+                        continue;
+                    }
+                    let native_handle = unsafe { ((node + 528) as *const u32).read() };
+                    let Some(native_visible) = (unsafe { clip_visible(n, native_handle) }) else {
+                        continue;
+                    };
+                    if unsafe { set_clip_visible(n, native_handle, 0) } {
+                        self.hidden[slot] = Some(NativeClip {
+                            handle: native_handle,
+                            visible: native_visible,
+                        });
+                    }
                 }
                 unsafe { visible(sprite.node, true) };
-                self.hidden[if self.custom != 0 { 1 } else { 0 }] = Some(NativeClip {
-                    handle,
-                    visible: native_visible,
-                });
                 self.sprite = Some(sprite);
-                self.choice = bundle;
+                self.image = Some(image);
                 event(Event::Surface("premium area"));
             }
             Err(_) => event(Event::Fault(
@@ -581,7 +592,7 @@ impl PremiumArea {
     unsafe fn restore(&mut self, n: &Native) {
         // Drop our sprite first so the native nodes never point at freed art.
         self.sprite = None;
-        self.choice = None;
+        self.image = None;
         for saved in self.hidden.iter_mut().filter_map(Option::take) {
             unsafe { set_clip_visible(n, saved.handle, saved.visible) };
         }
@@ -592,7 +603,7 @@ impl PremiumArea {
             && sprite.node == node
         {
             sprite.node = 0;
-            self.choice = None;
+            self.image = None;
             let texture = sprite.texture.take();
             // The sprite pool is retired with its scene while the premium nodes
             // are session-global. Restore native visibility immediately so the
@@ -656,33 +667,39 @@ impl BoundClip {
     }
 }
 
-/// Concentration-mode gameplay background. Both candidate window elements are
-/// rebound to the prepared texture; the native clip keeps its own transform and
-/// draw order, so no screen rectangle is reconstructed. The replacement follows
-/// the native show flag and is frozen per stage.
+/// Concentration-mode background. Both concentration window elements are
+/// rebound to the prepared texture; the native clip/layer keeps its own
+/// transform and draw order, so no screen rectangle is reconstructed. When an
+/// element has no named background clip, its root layer clip is bound instead
+/// (the default view may keep its art on the layer itself).
 #[derive(Default)]
 struct Concentration {
     window: usize,
+    index: u32,
+    layers: [usize; 2],
     clips: [usize; 2],
+    fallback: [bool; 2],
     visible: bool,
-    choice: Option<Arc<Bundle>>,
-    bound_choice: Option<Arc<Bundle>>,
+    image: Option<Arc<Prepared>>,
+    bound_image: Option<Arc<Prepared>>,
     bound: Vec<BoundClip>,
 }
 
 impl Concentration {
-    /// Resolve the background clip in both concentration window elements. The
-    /// native apply path uses index 1; the default (no-customization) view may
-    /// use index 0, so try both and keep whichever exist.
-    unsafe fn resolve(n: &Native, window: usize) -> [usize; 2] {
+    /// Resolve both concentration window elements. The native apply path uses
+    /// element 1; the default view may use element 0 and may keep its art on
+    /// the layer instead of a named child clip.
+    unsafe fn resolve(n: &Native, window: usize) -> ([usize; 2], [usize; 2], [bool; 2]) {
+        let mut layers = [0usize; 2];
         let mut clips = [0usize; 2];
+        let mut fallback = [false; 2];
         if window == 0 {
-            return clips;
+            return (layers, clips, fallback);
         }
         let getter: unsafe extern "system" fn(usize, *mut u32) -> *const usize =
             unsafe { n.function("concentration_layer") };
         let find: FindClip = unsafe { n.function("find_clip") };
-        for (index, slot) in clips.iter_mut().enumerate() {
+        for index in 0..2 {
             let mut key = index as u32;
             let entry = unsafe { getter(window + 8, &mut key) };
             if entry.is_null() {
@@ -692,10 +709,18 @@ impl Concentration {
             if layer == 0 {
                 continue;
             }
+            layers[index] = layer;
             let clip = unsafe { find(layer, c"concentration_bg_set/bg".as_ptr().cast()) };
-            *slot = clip;
+            if clip != 0 {
+                clips[index] = clip;
+            } else {
+                // CMovieClip layout at the layer root: name at +0, node id at
+                // +512 and archive at +520. layer +16 is the root clip object.
+                clips[index] = layer + 16;
+                fallback[index] = true;
+            }
         }
-        clips
+        (layers, clips, fallback)
     }
 
     unsafe fn observe(&mut self, n: &Native, window: usize) {
@@ -704,19 +729,37 @@ impl Concentration {
         }
         unsafe { self.release(n) };
         self.window = window;
-        self.clips = unsafe { Self::resolve(n, window) };
+        (self.layers, self.clips, self.fallback) = unsafe { Self::resolve(n, window) };
         event(Event::Diag(format!(
-            "concentration background clips: element0={:#x} element1={:#x}",
-            self.clips[0], self.clips[1]
+            "concentration background: index={} element0={:#x} layer={:#x} fallback={} element1={:#x} layer={:#x} fallback={}",
+            self.index,
+            self.clips[0],
+            self.layers[0],
+            self.fallback[0],
+            self.clips[1],
+            self.layers[1],
+            self.fallback[1],
+        )));
+    }
+
+    /// Log which element the game actually shows so the next report tells us
+    /// whether the default or the customization view is active.
+    unsafe fn log_visibility(&self, n: &Native, show: u8) {
+        let mut visible = [None; 2];
+        for (index, layer) in self.layers.iter().copied().enumerate() {
+            if layer != 0 {
+                let handle = unsafe { ((layer + 528) as *const u32).read() };
+                visible[index] = unsafe { clip_visible(n, handle) };
+            }
+        }
+        event(Event::Diag(format!(
+            "concentration show={show} index={} element0_visible={:?} element1_visible={:?}",
+            self.index, visible[0], visible[1]
         )));
     }
 
     unsafe fn refresh(&mut self, n: &Native, enabled: bool) {
-        let image = self
-            .choice
-            .as_ref()
-            .and_then(|b| b.concentration.clone())
-            .filter(|_| enabled && self.visible);
+        let image = self.image.clone().filter(|_| enabled && self.visible);
         let Some(image) = image else {
             unsafe { self.release(n) };
             return;
@@ -724,10 +767,10 @@ impl Concentration {
         if self.clips.iter().all(|clip| *clip == 0) {
             return;
         }
-        let current = match (&self.bound_choice, &self.choice) {
-            (Some(bound), Some(choice)) => Arc::ptr_eq(bound, choice),
-            _ => false,
-        };
+        let current = self
+            .bound_image
+            .as_ref()
+            .is_some_and(|bound| Arc::ptr_eq(bound, &image));
         if current && !self.bound.is_empty() {
             return;
         }
@@ -759,9 +802,9 @@ impl Concentration {
             unsafe { old.restore(n) };
         }
         if self.bound.is_empty() {
-            self.bound_choice = None;
+            self.bound_image = None;
         } else {
-            self.bound_choice = self.choice.clone();
+            self.bound_image = Some(image);
             event(Event::Surface("concentration background"));
         }
     }
@@ -780,7 +823,7 @@ impl Concentration {
             }
         }
         self.bound = keep;
-        self.bound_choice = None;
+        self.bound_image = None;
     }
 }
 
@@ -819,16 +862,19 @@ impl Surfaces {
                 base: 0,
                 custom: 0,
                 priority: 0,
-                choice: None,
+                image: None,
                 sprite: None,
                 hidden: [None, None],
             },
             concentration: Concentration {
                 window: 0,
+                index: 0,
+                layers: [0, 0],
                 clips: [0, 0],
+                fallback: [false, false],
                 visible: false,
-                choice: None,
-                bound_choice: None,
+                image: None,
+                bound_image: None,
                 bound: Vec::new(),
             },
         }
@@ -837,14 +883,14 @@ impl Surfaces {
     fn leave_select(&mut self, scene: usize) {
         if self.scene == scene {
             if let Some(n) = NATIVE.get() {
-                // A gameplay overlay must never survive into song selection, and
-                // the premium sprite is released with the selection sprite pool;
-                // restore the native nodes in both cases so no area turns black.
+                // The concentration overlay is re-applied per stage, so release
+                // its bindings here. The premium background is also used outside
+                // selection: keep the replacement and let the sprite-release
+                // observer restore native visibility only when it is reclaimed.
                 unsafe { self.concentration.release(n) };
-                unsafe { self.premium_area.restore(n) };
             }
             self.concentration.visible = false;
-            self.concentration.choice = None;
+            self.concentration.image = None;
             self.frame_chara = FrameChara::default();
             self.scene = 0;
             self.select_texture = None;
@@ -1427,8 +1473,9 @@ unsafe extern "system" fn concentration_apply(window: usize, index: u32) {
         }
         let Some(n) = NATIVE.get() else { return };
         let Some(mut s) = state() else { return };
+        s.concentration.index = index;
         unsafe { s.concentration.observe(n, window) };
-        s.concentration.choice = snapshot();
+        s.concentration.image = snapshot().and_then(|bundle| bundle.concentration.clone());
         unsafe {
             s.concentration
                 .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
@@ -1450,11 +1497,12 @@ unsafe extern "system" fn concentration_show(window: usize, show: u8) -> usize {
         let Some(mut s) = state() else { return };
         if show != 0 {
             unsafe { s.concentration.observe(n, window) };
-            if s.concentration.choice.is_none() {
-                s.concentration.choice = snapshot();
+            if s.concentration.image.is_none() {
+                s.concentration.image = snapshot().and_then(|bundle| bundle.concentration.clone());
             }
         }
         s.concentration.visible = show != 0;
+        unsafe { s.concentration.log_visibility(n, show) };
         unsafe {
             s.concentration
                 .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))

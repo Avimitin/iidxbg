@@ -507,3 +507,39 @@ next visual check is with the user.
 Release `target/release/iidxbg.dll` SHA-256:
 `cf26dbaf86e35570d294cdad4d7f7060e8cd2f8efbb76db0e79d38ae1f4d708c`.
 The `dist` release artifacts were not refreshed by this change.
+
+### In-game feedback round 2 (2026-10-22)
+
+The user deployed the build above (confirmed by its startup hash line). Premium
+selection displayed the custom image; gameplay fell back to stock, and
+concentration still showed stock. The log added these facts:
+
+- The premium sprite was created, released once by the native sprite pool, then
+  recreated eight times inside one preparation batch. The release observer
+  restored native visibility (no black area), and the repeated rebuilds came
+  from comparing the whole `Bundle` instead of the prepared image.
+- `concentration background clips: element0=0x0 element1=0x18c3de690`: the
+  default window element has no `concentration_bg_set/bg`; only element 1 does.
+  That clip has no restorable archive/name.
+- Leaving selection restored the premium native nodes, which is why gameplay
+  showed stock art again.
+
+Changes:
+
+- Premium keeps its replacement across scenes. Only an actual sprite-pool
+  release restores native visibility. Both the base layer and the customization
+  sprite are hidden while our sprite is active, so a later native show cannot
+  replace it.
+- Concentration resolves both window elements and falls back to the element
+  layer root clip when the named background clip is missing. On every native
+  show it logs the customize index plus both element visibilities, so the next
+  report identifies the visible element.
+- Image-identity comparison replaces whole-bundle comparison, so a publish
+  batch no longer recreates the premium sprite seven times.
+
+Offline re-verification: 27 tests, clippy, `cargo fmt --check` and the release
+build passed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`7567615abebc15ef89bc0388321d021a89f07b1d351424a51c78b4de4d534f1d`.
+The `dist` release artifacts were not refreshed by this change.
