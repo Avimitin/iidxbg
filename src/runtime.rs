@@ -9,6 +9,7 @@ use crate::{
     source::Providers,
     state::{Pending, Selection},
 };
+use sha2::{Digest, Sha256};
 use std::{
     ffi::c_void,
     io::Write,
@@ -665,6 +666,19 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
     }
     let run = || -> Result<()> {
         let config_path = root.join("iidxbg.toml");
+        // Identify the exact loaded build in every log; this makes a stale
+        // deployment immediately visible when diagnosing in-game reports.
+        if let Ok(path) = module_path(MODULE.load(Ordering::Acquire))
+            && let Ok(bytes) = std::fs::read(&path)
+        {
+            log(
+                &root,
+                &format!(
+                    "iidxbg build SHA-256 {}",
+                    hex::encode(Sha256::digest(&bytes))
+                ),
+            );
+        }
         let config = Config::load(&config_path)?;
         HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
         let mut character = crate::character::LocalImage::default();

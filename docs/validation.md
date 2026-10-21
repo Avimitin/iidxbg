@@ -495,7 +495,9 @@ Fixes:
   on selection exit, before the session-global nodes can be seen without their
   replacement.
 - Diagnostic log lines record the premium node handles and both concentration
-  element lookups for the next round.
+  element lookups for the next round. Startup also logs the loaded DLL's own
+  SHA-256 (`iidxbg build SHA-256 ...`), so a stale deployment is immediately
+  visible in the next report.
 
 Re-verified offline after the fixes: 27 tests, clippy, `cargo fmt --check`,
 release build, all four verifiers and private-process attachment in `native`,
@@ -503,5 +505,5 @@ release build, all four verifiers and private-process attachment in `native`,
 next visual check is with the user.
 
 Release `target/release/iidxbg.dll` SHA-256:
-`496d44a35e0971f5042f5e4c6484f531300f253627f0939cf1250d520970022d`.
+`cf26dbaf86e35570d294cdad4d7f7060e8cd2f8efbb76db0e79d38ae1f4d708c`.
 The `dist` release artifacts were not refreshed by this change.
