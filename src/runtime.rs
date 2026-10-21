@@ -136,6 +136,8 @@ struct Texture {
     // Stable 8-byte-aligned storage. Native constructor initializes all 64 bytes.
     wrapper: Box<[u64; 8]>,
     center: [f32; 2],
+    width: u32,
+    height: u32,
 }
 
 impl Texture {
@@ -185,12 +187,47 @@ impl Texture {
         let result = Self {
             wrapper,
             center: [image.width as f32 * 0.5, image.height as f32 * 0.5],
+            width: image.width,
+            height: image.height,
         };
         if result.wrapper[1] == 0 || result.wrapper[2] as u32 == 0 {
             return Err(Error::Native("AFP texture registration"));
         }
         // Constructor owns a COM reference; local COM owner is now released.
         Ok(result)
+    }
+
+    /// Reuse the existing D3D texture when the canvas size is unchanged; only
+    /// the pixels are rewritten. Returns true when the texture had to be
+    /// recreated (the caller must rebind the descriptor).
+    unsafe fn refresh(&mut self, native: &Native, image: &Prepared) -> Result<bool> {
+        if self.width != image.width || self.height != image.height {
+            *self = unsafe { Self::upload(native, image) }?;
+            return Ok(true);
+        }
+        let raw = self.wrapper[1] as *mut c_void;
+        let texture = unsafe { IDirect3DTexture9::from_raw_borrowed(&raw) }
+            .ok_or(Error::Native("no D3D9 texture"))?;
+        let mut locked = D3DLOCKED_RECT::default();
+        unsafe { texture.LockRect(0, &mut locked, std::ptr::null(), D3DLOCK_DISCARD as u32) }
+            .map_err(|_| Error::Native("LockRect"))?;
+        let row_bytes = image.width as usize * 4;
+        if locked.pBits.is_null() || locked.Pitch < row_bytes as i32 {
+            let _ = unsafe { texture.UnlockRect(0) };
+            return Err(Error::Native("invalid texture pitch"));
+        }
+        for y in 0..image.height as usize {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    image.bgra.as_ptr().add(y * row_bytes),
+                    (locked.pBits as *mut u8).add(y * locked.Pitch as usize),
+                    row_bytes,
+                );
+            }
+        }
+        unsafe { texture.UnlockRect(0) }.map_err(|_| Error::Native("UnlockRect"))?;
+        self.center = [image.width as f32 * 0.5, image.height as f32 * 0.5];
+        Ok(false)
     }
 
     fn descriptor(&self) -> *const u8 {
@@ -213,6 +250,7 @@ struct Graphics {
     selection: Selection,
     background: usize,
     texture: Option<Texture>,
+    bound: bool,
     attempted: bool,
     failed: bool,
     layout_reported: bool,
@@ -227,6 +265,7 @@ impl Graphics {
             },
             background: 0,
             texture: None,
+            bound: false,
             attempted: false,
             failed: false,
             layout_reported: false,
@@ -270,6 +309,7 @@ impl Graphics {
             request_images();
             self.background = background;
             self.attempted = false;
+            self.bound = false;
             self.layout_reported = false;
             if self.selection.selected.is_none() {
                 event(Event::Stock);
@@ -280,28 +320,50 @@ impl Graphics {
             event(Event::Fault("unexpected simultaneous results instance"));
             return;
         }
-        if self.texture.is_none() && !self.attempted {
+        if !self.attempted {
             self.attempted = true;
             if let Some(image) = &self.selection.selected {
                 let start = Instant::now();
-                match unsafe { Texture::upload(n, image) } {
-                    Ok(texture) => {
-                        self.texture = Some(texture);
-                        event(Event::Applied {
-                            width: image.width,
-                            height: image.height,
-                            upload_us: start.elapsed().as_micros(),
-                        });
+                let mut recreated = false;
+                let mut failed = false;
+                if let Some(texture) = self.texture.as_mut() {
+                    match unsafe { texture.refresh(n, image) } {
+                        Ok(changed) => recreated = changed,
+                        Err(_) => failed = true,
                     }
-                    Err(_) => {
-                        event(Event::Fault(
-                            "texture upload/registration failed; stock this visit",
-                        ));
+                } else {
+                    match unsafe { Texture::upload(n, image) } {
+                        Ok(texture) => {
+                            self.texture = Some(texture);
+                            recreated = true;
+                        }
+                        Err(_) => failed = true,
                     }
+                }
+                if failed {
+                    self.texture = None;
+                    self.bound = false;
+                    event(Event::Fault(
+                        "texture upload/registration failed; stock this visit",
+                    ));
+                } else {
+                    if recreated {
+                        self.bound = false;
+                    }
+                    event(Event::Applied {
+                        width: image.width,
+                        height: image.height,
+                        upload_us: start.elapsed().as_micros(),
+                    });
                 }
             }
         }
         if let Some(texture) = &self.texture {
+            // Rebind only once per visit; the clip keeps the descriptor until the
+            // stock restore or a new visit.
+            if self.bound {
+                return;
+            }
             let find: FindClip = unsafe { n.function("find_clip") };
             let clip = unsafe {
                 find(
@@ -330,6 +392,7 @@ impl Graphics {
                 origin(clip, texture.center[0], texture.center[1]);
                 visible(clip, 1);
             }
+            self.bound = true;
             if !self.layout_reported {
                 self.layout_reported = true;
                 event(Event::Centered {
@@ -345,6 +408,7 @@ impl Graphics {
             self.stock(n);
         }
         self.texture = None;
+        self.bound = false;
         self.attempted = false;
     }
 }
@@ -744,6 +808,11 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                     if STOP.load(Ordering::Acquire) {
                         break;
                     }
+                    // A newer scene request supersedes this batch. Stop early so
+                    // its download/decode does not delay the fresh snapshot.
+                    if generation != REQUEST.load(Ordering::Acquire) {
+                        break;
+                    }
                     if share && surface == Surface::Concentration {
                         images[surface.index()] = images[Surface::PremiumArea.index()].clone();
                         continue;
@@ -821,10 +890,19 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                         surfaces::publish(&images);
                     }
                 }
-                if !failed && generation == REQUEST.load(Ordering::Acquire) {
+                let superseded = generation != REQUEST.load(Ordering::Acquire);
+                if !failed && !superseded {
                     completed = generation;
                 }
-                next_attempt = Instant::now() + Duration::from_secs(if failed { 60 } else { 30 });
+                next_attempt = Instant::now()
+                    + Duration::from_secs(if failed {
+                        60
+                    } else if superseded {
+                        // Process the newer request immediately.
+                        0
+                    } else {
+                        30
+                    });
             }
             // Sleep until a hook/log/shutdown wakes us. Only an outstanding
             // preparation request schedules a timeout; there is no file watcher.

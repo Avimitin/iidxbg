@@ -675,3 +675,39 @@ Release `target/release/iidxbg.dll` SHA-256:
 `1812cb49231034eddf489d7f21f849963d4e993d06a33e1d28dae74d0f6c4927`.
 The `dist` release artifacts were not refreshed locally; the tag build produces
 the GitHub release ZIP.
+
+### Performance pass (2026-10-22)
+
+Six optimizations landed after the `v0.2.1` tag (the tag still points at the
+pre-pass release):
+
+1. **Texture reuse.** `Texture::refresh` rewrites pixels through
+   `LockRect(DISCARD)` when the canvas size is unchanged; a new `CreateTexture`
+   only happens on first use or a size change. Results, selection, premium and
+   concentration keep their texture between visits (device loss drops it).
+2. **Results binds once per visit.** The illustration clip is found, bound and
+   centered on the first background callback; later callbacks return after the
+   `bound` check instead of repeating `find_clip`/`set_texture`/origin.
+3. **Character transform caching.** The native transform is still read every
+   update, but the AFP setters run only when position/origin/scale/color or the
+   layer size changes.
+4. **Stale batch abort.** A newer scene request stops the worker between
+   surfaces and is prepared immediately instead of waiting for the success
+   backoff.
+5. **Local listing cache.** Non-recursive folders reuse their listing while the
+   directory mtime is unchanged; recursive walks keep rescanning. Cleanup
+   already returns early for `max_images = 0`.
+6. **Clip reuse and pool diagnostic.** A repeated concentration show reuses
+   cached clip entries while their AFP nodes are valid; the
+   `concentration background:` line now reports the CMovieClip pool level from
+   `clip_pool_count`. This verifies whether `find_clip` keeps allocating.
+
+Offline re-verification: 27 tests, clippy with warnings denied,
+`cargo fmt --all --check`, the optimized release build, all four static
+verifiers and `smoke-attach.py` in `native`, `chain` and `bad-tail` modes
+passed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`7897f84d5ef6c4fe82b185763e4b531176a0980dd160e6ce9182bdc44afd0c1b`.
+This build is on `master` after `v0.2.1`; the tag release does not contain the
+performance pass.

@@ -86,6 +86,19 @@ struct HiddenFrameChara {
     visible: u8,
 }
 
+/// Last transform written to the character replacement sprite. Identical reads
+/// skip the AFP setters; the native root is still read every update so native
+/// animation continues to line up.
+#[derive(Clone, Copy, PartialEq)]
+struct FramePlacement {
+    position: [f32; 2],
+    origin: [f32; 2],
+    scale: [f32; 2],
+    color: [f32; 4],
+    width: i32,
+    height: i32,
+}
+
 /// Only the character's root clip is masked. Never cache an owning native pointer.
 #[derive(Default)]
 struct FrameChara {
@@ -94,6 +107,7 @@ struct FrameChara {
     sprite: Option<Sprite>,
     layer: usize,
     attempted: bool,
+    placed: Option<FramePlacement>,
 }
 
 impl FrameChara {
@@ -180,6 +194,7 @@ impl FrameChara {
         {
             sprite.node = 0;
             self.attempted = false;
+            self.placed = None;
             return sprite.texture.take();
         }
         None
@@ -194,6 +209,7 @@ impl FrameChara {
             };
             if !same {
                 self.sprite = None;
+                self.placed = None;
                 self.image = image.clone();
                 self.attempted = false;
             }
@@ -204,6 +220,7 @@ impl FrameChara {
         if self.layer != layer {
             self.layer = layer;
             self.sprite = None;
+            self.placed = None;
             self.attempted = false;
         }
         if hide {
@@ -220,6 +237,7 @@ impl FrameChara {
             match unsafe { Sprite::create(n, image, priority) } {
                 Ok(sprite) => {
                     self.sprite = Some(sprite);
+                    self.placed = None;
                     event(Event::Surface("frame character"));
                 }
                 Err(_) => event(Event::Fault(
@@ -228,17 +246,18 @@ impl FrameChara {
             }
         }
         if let Some(sprite) = &self.sprite {
-            if !unsafe { Self::place_sprite(n, layer, clip, sprite.node) } {
+            let node = sprite.node;
+            if !unsafe { self.place_sprite(n, layer, clip, node) } {
                 return;
             }
             unsafe { self.hide(n, scene) };
             if self.hidden.is_some_and(|saved| saved.visible != 0) {
-                unsafe { visible(self.sprite.as_ref().unwrap().node, true) };
+                unsafe { visible(node, true) };
             }
         }
     }
 
-    unsafe fn place_sprite(n: &Native, layer: usize, clip: u32, sprite: usize) -> bool {
+    unsafe fn place_sprite(&mut self, n: &Native, layer: usize, clip: u32, sprite: usize) -> bool {
         let get: PropertyGet = unsafe {
             std::mem::transmute(field(
                 n.base + n.profile.surface_data["afp_property_get"],
@@ -269,6 +288,17 @@ impl FrameChara {
             return false;
         }
         let ratio = [width as f32 / 1920.0, height as f32 / 1080.0];
+        let placement = FramePlacement {
+            position,
+            origin,
+            scale,
+            color,
+            width,
+            height,
+        };
+        if self.placed == Some(placement) {
+            return true;
+        }
         let set_origin: Position = unsafe { n.function("sprite_origin") };
         let set_position: Position = unsafe { n.function("sprite_position") };
         let set_scale: Scale = unsafe { n.function("sprite_scale") };
@@ -287,6 +317,7 @@ impl FrameChara {
             set_scale(sprite, scale[0] * ratio[0], scale[1] * ratio[1]);
             set_color(sprite, color[3], color[0], color[1], color[2]);
         }
+        self.placed = Some(placement);
         true
     }
 }
@@ -545,6 +576,19 @@ impl PremiumArea {
         if current && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0) {
             return;
         }
+        // Reuse the live sprite when only the pixels changed: refresh the D3D
+        // texture in place instead of rebuilding the AFP node.
+        if let Some(sprite) = &mut self.sprite
+            && sprite.node != 0
+            && let Some(texture) = &mut sprite.texture
+            && texture.width == image.width
+            && texture.height == image.height
+            && unsafe { texture.refresh(n, &image) }.is_ok()
+        {
+            self.image = Some(image);
+            event(Event::Surface("premium area"));
+            return;
+        }
         let target = if self.custom != 0 {
             self.custom
         } else {
@@ -759,16 +803,39 @@ impl Concentration {
     /// retires the clip nodes, so a clip found while the window was hidden can
     /// have no AFP node by the time it is shown. Resolving immediately before a
     /// bind keeps the clip entry and its node consistent.
+    /// Both clip entries keep their AFP node between shows in the common case,
+    /// so a repeated show can skip `find_clip` (which allocates a pool entry).
+    fn clips_valid(&self) -> bool {
+        self.clips.iter().filter(|clip| **clip != 0).all(|clip| {
+            let node = unsafe { ((clip + 512) as *const u32).read() };
+            node & 0x8000_0000 == 0
+        })
+    }
+
     unsafe fn observe(&mut self, n: &Native, window: usize, force: bool) {
-        if !force && self.window == window && (self.clips[0] != 0 || self.clips[1] != 0) {
+        if !force
+            && self.window == window
+            && (self.clips[0] != 0 || self.clips[1] != 0)
+            && self.clips_valid()
+        {
             return;
         }
         unsafe { self.release(n) };
         self.window = window;
         (self.layers, self.clips, self.fallback, self.names) = unsafe { Self::resolve(n, window) };
+        // Diagnostic: the named-clip helper allocates a 536-byte entry per
+        // successful call, so the pool level shows whether repeated resolves
+        // keep growing it.
+        let pool = n
+            .profile
+            .surface_data
+            .get("clip_pool_count")
+            .map(|rva| unsafe { ((n.base + rva) as *const u32).read() })
+            .unwrap_or(0);
         event(Event::Diag(format!(
-            "concentration background: index={} element0={:#x} layer={:#x} name={} fallback={} element1={:#x} layer={:#x} name={} fallback={}",
+            "concentration background: index={} pool={} element0={:#x} layer={:#x} name={} fallback={} element1={:#x} layer={:#x} name={} fallback={}",
             self.index,
+            pool,
             self.clips[0],
             self.layers[0],
             self.names[0],
@@ -833,6 +900,26 @@ impl Concentration {
             .is_some_and(|bound| Arc::ptr_eq(bound, &image));
         if current && !self.bound.is_empty() {
             return;
+        }
+        // New image on the same bound clips: refresh the D3D textures in place
+        // and keep the existing AFP binding.
+        if !self.bound.is_empty()
+            && self.bound.iter().all(|bound| {
+                bound.texture.width == image.width && bound.texture.height == image.height
+            })
+        {
+            let mut ok = true;
+            for bound in &mut self.bound {
+                if unsafe { bound.texture.refresh(n, &image) }.is_err() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                self.bound_image = Some(image);
+                event(Event::Surface("concentration background"));
+                return;
+            }
         }
         let mut previous = std::mem::take(&mut self.bound);
         for clip in self.clips.iter().copied().filter(|clip| *clip != 0) {
@@ -916,6 +1003,7 @@ impl Surfaces {
                 sprite: None,
                 layer: 0,
                 attempted: false,
+                placed: None,
             },
             premium_area: PremiumArea {
                 object: 0,
@@ -955,7 +1043,8 @@ impl Surfaces {
             self.concentration.image = None;
             self.frame_chara = FrameChara::default();
             self.scene = 0;
-            self.select_texture = None;
+            // Keep the selection texture: the next visit refreshes it in place
+            // instead of creating a new D3D texture. Device loss drops it.
             self.select_choice = None;
             self.select_attempted = false;
             request_images();
@@ -1120,12 +1209,25 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
         }
         if !s.select_attempted {
             s.select_attempted = true;
-            if let Some(image) = s.select_choice.as_ref().and_then(|b| b.select.as_ref()) {
-                s.select_texture = unsafe { Texture::upload(n, image) }.ok();
-                if s.select_texture.is_none() {
-                    event(Event::Fault("selection texture upload failed; using stock"));
+            if let Some(image) = s.select_choice.as_ref().and_then(|b| b.select.clone()) {
+                let ok = if let Some(texture) = s.select_texture.as_mut() {
+                    unsafe { texture.refresh(n, &image) }.is_ok()
                 } else {
+                    match unsafe { Texture::upload(n, &image) } {
+                        Ok(texture) => {
+                            s.select_texture = Some(texture);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                };
+                if ok {
                     event(Event::Surface("song selection"));
+                } else {
+                    s.select_texture = None;
+                    event(Event::Fault(
+                        "selection texture refresh failed; using stock",
+                    ));
                 }
             }
         }
@@ -1591,8 +1693,9 @@ unsafe extern "system" fn concentration_show(window: usize, show: u8) -> usize {
         let Some(mut s) = state() else { return };
         if show != 0 {
             // Resolve after the native show so the clip entries point at the
-            // freshly created AFP nodes.
-            unsafe { s.concentration.observe(n, window, true) };
+            // freshly created AFP nodes; a repeated show with valid nodes reuses
+            // the cached entries.
+            unsafe { s.concentration.observe(n, window, false) };
             if s.concentration.image.is_none() {
                 s.concentration.image = snapshot().and_then(|bundle| bundle.concentration.clone());
             }
@@ -1863,7 +1966,8 @@ mod character_tests {
             profile.rvas.insert(name.into(), ptr as usize);
         }
         let n = Native { base: 0, profile };
-        assert!(unsafe { FrameChara::place_sprite(&n, 123, 42, 456) });
+        let mut chara = FrameChara::default();
+        assert!(unsafe { chara.place_sprite(&n, 123, 42, 456) });
         assert_eq!(
             MOCK.with(|m| m.borrow().geometry.clone()),
             vec![
@@ -1873,8 +1977,12 @@ mod character_tests {
                 vec![0.5, 0.7, 0.8, 0.9]
             ]
         );
+        // Identical native geometry must not write the AFP setters again.
+        let writes = MOCK.with(|m| m.borrow().geometry.len());
+        assert!(unsafe { chara.place_sprite(&n, 123, 42, 456) });
+        assert_eq!(MOCK.with(|m| m.borrow().geometry.len()), writes);
         MOCK.with(|m| m.borrow_mut().fail = true);
-        assert!(!unsafe { FrameChara::place_sprite(&n, 123, 42, 456) });
+        assert!(!unsafe { chara.place_sprite(&n, 123, 42, 456) });
     }
 
     #[test]

@@ -82,6 +82,27 @@ logs errors without converting a successful image preparation to failure.
 Contain resizing builds a low-resolution blurred backdrop and overlays a sharp
 centered foreground; no native ABI or hook address changes are needed.
 
+The `0.2.1` performance pass tightened both sides of that pipeline:
+
+- GPU textures are reused per surface. `Texture::refresh` rewrites the pixels
+  through `LockRect(DISCARD)` when the canvas size is unchanged; a new
+  `CreateTexture` (and the associated ~8 ms first-draw hitch for 1920x1080) only
+  happens on the first use or a size change. Results, selection, premium and
+  concentration textures stay alive between visits and device loss drops them.
+- The results illustration binds its clip once per visit (`Graphics::bound`)
+  instead of re-running `find_clip`/`set_texture`/origin on every background
+  callback.
+- The selection character still reads the native transform every update, but
+  skips the AFP setters while the values are unchanged (`FramePlacement`).
+- A newer scene request aborts the current worker batch between surfaces and is
+  prepared immediately instead of waiting for the success backoff.
+- Non-recursive local folders cache their listing while the directory mtime is
+  unchanged; recursive walks keep the previous behavior.
+- A repeated concentration show reuses cached clip entries when their AFP nodes
+  are still valid, avoiding another `find_clip` pool allocation. The
+  `concentration background:` diagnostics now include the CMovieClip pool level
+  (`clip_pool_count` in the exact-build profile) so growth is visible.
+
 Selection draws directly at the native movie dispatch layer with D3D state
 restoration. Cover/graph adapters allocate native retained CSprites from custom
 texture descriptors and temporarily substitute artwork pointers only during

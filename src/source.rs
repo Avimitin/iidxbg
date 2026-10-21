@@ -10,7 +10,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +36,15 @@ pub struct Provider {
     config: Config,
     client: Client,
     previous: Option<String>,
+    /// Non-recursive local listings are reused while the directory mtime is
+    /// unchanged, so repeated scene requests do not rescan the same folder.
+    scan: Option<ScanCache>,
+}
+
+struct ScanCache {
+    directory: PathBuf,
+    modified: SystemTime,
+    paths: Vec<PathBuf>,
 }
 
 /// Independent repeat histories and HTTP policies; only the image worker owns this.
@@ -130,6 +139,7 @@ impl Provider {
             config,
             client,
             previous: None,
+            scan: None,
         })
     }
 
@@ -161,14 +171,8 @@ impl Provider {
         Ok(result)
     }
 
-    fn local(&self) -> Result<Prepared> {
-        let mut paths = Vec::new();
-        collect(
-            &self.config.local_directory,
-            self.config.recursive,
-            0,
-            &mut paths,
-        )?;
+    fn local(&mut self) -> Result<Prepared> {
+        let mut paths = self.local_paths()?;
         fastrand::shuffle(&mut paths);
         // Prefer another image, but permit a singleton library.
         paths.sort_by_key(|p| self.previous.as_deref() == Some(&p.to_string_lossy()));
@@ -187,6 +191,41 @@ impl Provider {
             }
         }
         Err(Error::NoImages)
+    }
+
+    fn local_paths(&mut self) -> Result<Vec<PathBuf>> {
+        let directory = self.config.local_directory.clone();
+        // A recursive walk has no single cheap freshness key; only flat folders
+        // (the normal layout) reuse the listing.
+        if self.config.recursive {
+            let mut paths = Vec::new();
+            collect(&directory, true, 0, &mut paths)?;
+            return Ok(paths);
+        }
+        let modified = fs::metadata(&directory).and_then(|m| m.modified()).ok();
+        if let (Some(modified), Some(cache)) = (modified, &self.scan)
+            && cache.directory == directory
+            && cache.modified == modified
+        {
+            return Ok(cache.paths.clone());
+        }
+        let mut paths = Vec::new();
+        match collect(&directory, false, 0, &mut paths) {
+            Ok(()) => {
+                if let Some(modified) = modified {
+                    self.scan = Some(ScanCache {
+                        directory,
+                        modified,
+                        paths: paths.clone(),
+                    });
+                }
+                Ok(paths)
+            }
+            Err(e) => {
+                self.scan = None;
+                Err(e)
+            }
+        }
     }
 
     fn remote(&self) -> Result<Prepared> {

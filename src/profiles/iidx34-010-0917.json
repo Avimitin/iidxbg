@@ -231,6 +231,8 @@
     "afp_property_set": 13003792,
     "select_frame_priority": 188,
     "premium_area_base": 16,
-    "premium_area_custom": 24
+    "premium_area_custom": 24,
+    "concentration_priority": 6,
+    "clip_pool_count": 206572160
   }
 }
