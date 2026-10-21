@@ -32,10 +32,11 @@ visits can request a reload and re-enable. Configuration never resets the
 separate native fault/shutdown latch.
 
 Each profile owns its addresses, scene layout and hook slots. IIDX 33 uses
-scene +256 and cleanup slot 14; IIDX 34 uses +264 and slot 17. Runtime code does
-not infer these from a version number or scatter version conditionals through
-the image pipeline. Unknown builds fail attachment and leave the game untouched.
-Profiles are embedded in the DLL; they are not user-editable runtime JSON.
+scene +256 and cleanup slot 14; both inspected IIDX 34 builds use +264 and slot
+17. Runtime code does not infer these from a version number or scatter version
+conditionals through the image pipeline. Unknown builds fail attachment and
+leave the game untouched. Profiles are embedded in the DLL; they are not
+user-editable runtime JSON.
 
 The inspected builds share the Microsoft x64 callback signatures and the
 64-byte AFP texture wrapper layout, so they use the same native adapter.
@@ -45,13 +46,15 @@ Do not try to express incompatible behavior through offsets alone.
 
 Separate version DLLs become justified if versions require incompatible
 architectures/dependencies or independent release lifecycles. Neither is true
-of these two inspected x64 builds. Separate artifacts now would duplicate
+of these three inspected x64 builds. Separate artifacts now would duplicate
 packaging and invite loading the wrong plugin without improving isolation.
 
-See [IIDX 33 evidence](iidx33-analysis.md) and
-[IIDX 34 evidence](iidx34-analysis.md). Static compatibility does not establish
-in-game stability. The user confirmed IIDX 33 image display and corrected
-placement; broader lifecycle testing remains. IIDX 34 has only offline validation.
+See [IIDX 33 evidence](iidx33-analysis.md),
+[IIDX 34 / 20260917 evidence](iidx34-analysis.md) and
+[IIDX 34 / 010-0917 evidence](iidx34-010-0917-analysis.md). Static compatibility
+does not establish in-game stability. The user confirmed IIDX 33 image display
+and corrected placement; broader lifecycle testing remains. Both IIDX 34 builds
+have only offline validation.
 
 ## Additional surface adapters
 

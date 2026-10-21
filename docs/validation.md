@@ -413,3 +413,29 @@ for both exact builds passed. Refreshed dist DLL/default TOML and generated
 - `dist/iidxbg.dll` SHA-256: `6e4fb3f571267c2167565ad291cbe91216792b978c1d440ac9061359103c3050`.
 
 - `dist/iidxbg-0.2.0-windows-x64.zip` SHA-256: `034813bc1f769fa2f64d057db6248ceff962de954b8243174979715392b60d84`.
+
+## IIDX 34 / 010-0917 support (2026-10-22)
+
+Added a third exact-build profile for SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`
+(18,200,216 bytes; PE timestamp 2026-09-17). Input analysis used local IDA
+Professional 9.4/Hex-Rays, PE exception entries, RTTI, Capstone and Unicorn;
+see [the evidence record](iidx34-010-0917-analysis.md).
+
+- All 26 Rust tests passed, including the new profile in guard completeness,
+  hook-chain recognition and surface/frame-character tests.
+- Clippy for all targets with warnings denied and `cargo fmt --all --check` passed.
+- Optimized release build succeeded. `iidxbg-tool verify` accepted all three
+  profiles and rejected unknown hashes.
+- `verify-native.py`, `verify-surfaces.py`, `verify-frame-chara.py` and
+  `verify-origin.py` passed on the new DLL. The native verifier checked every
+  embedded guard, all three hook slots, RTTI, scene/background layout, binding
+  strings, texture lifecycle and AFP ordinal 137; the origin emulator covered
+  1920x1080, 1280x720 and 1921x1081 centers.
+- Private-process attachment passed in `native`, `chain` and `bad-tail` modes for
+  the new profile; the earlier IIDX 34 `native` mode still passed.
+- No game process was started and no in-game rendering was validated.
+
+Local `target/release/iidxbg.dll` SHA-256:
+`4020f55a80896c57a50b732ef6ed58a570be80d73f8dc3dafefa7e102c799eea`.
+The `dist` release artifacts were not refreshed by this change.

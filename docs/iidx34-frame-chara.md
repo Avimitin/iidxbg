@@ -9,6 +9,8 @@ mock-native tests; **no in-game validation of these controls**.
 - PE image base `0x180000000`, SizeOfImage `0xc5ff000`.
 - Addresses below are RVAs. Exact profile matching is required; this is not
   support inferred from the IIDX version number.
+- This record covers hash `3755...fe83`. The later `010-0917` executable is
+  recorded in [IIDX 34 / 010-0917](iidx34-010-0917-analysis.md).
 
 ## Construction and ownership evidence
 

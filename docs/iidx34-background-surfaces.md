@@ -1,7 +1,7 @@
 # IIDX 34: selection, covers and target graph
 
 Recorded 2026-10-21 using IDA/Hex-Rays, PE vtables and Capstone.
-Input: `C:\Users\BeatMania IIDX LM\Downloads\bm2dx.dll`.
+Input: `C:\Users\BeatMania IIDX LM\Downloads\010-0916bm2dx.dll`.
 User build label **34 / 20260917**; size **18,200,216**.
 SHA-256: `3755587f44785effe5008f74cfe7dccbdf423ad09feead48e00a90f78a42fe83`.
 Preferred base `0x180000000`; image size `0xc5ff000`.
@@ -10,6 +10,8 @@ These are investigation anchors, not additional runtime hook profiles.
 
 See [design and limitations](background-surfaces.md) and
 [33 comparison](iidx33-background-surfaces.md).
+The later `010-0917` executable is recorded separately in
+[IIDX 34 / 010-0917](iidx34-010-0917-analysis.md).
 
 ## Selection background and return-only helpers
 

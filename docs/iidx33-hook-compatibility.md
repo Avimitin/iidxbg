@@ -53,7 +53,7 @@ results background feature and is not copied here.
 ## iidxbg implementation
 
 `src/hook_chain.rs` applies the same constrained relay recognition to the native
-entry guards in both exact-build profiles. It does not accept arbitrary jumps,
+entry guards in all exact-build profiles. It does not accept arbitrary jumps,
 changed tail bytes, invalid relays, non-executable targets or unowned targets.
 Runtime checks use `ReadProcessMemory`, `VirtualQuery` and existing-module lookup.
 No discovered destination is executed during validation.
@@ -81,7 +81,7 @@ Any rejection occurs before installing iidxbg's hooks. The misleading
 
 ## Reproduction and remaining unknowns
 
-Unit tests cover both profiles' original guards, recognized chains, changed
+Unit tests cover all profiles' original guards, recognized chains, changed
 tail bytes, truncated/invalid relays, non-executable addresses, absent module
 ownership and self-referential targets. `scripts/smoke-attach.py` maps a supplied
 game DLL in a private test process without running its entry point/imports.

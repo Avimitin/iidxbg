@@ -51,10 +51,11 @@ pub struct Table {
     pub target: usize,
 }
 
-pub fn supported() -> [Profile; 2] {
+pub fn supported() -> [Profile; 3] {
     [
         include_str!("profiles/iidx33-20260812.json"),
         include_str!("profiles/iidx34-20260917.json"),
+        include_str!("profiles/iidx34-010-0917.json"),
     ]
     .map(|json| serde_json::from_str(json).expect("embedded profile"))
 }

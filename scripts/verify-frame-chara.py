@@ -33,6 +33,13 @@ def verify(path):
         root_store = 0x3400F5
         frame_update = 0x5DE940
         chara_name = 0xCA15A8
+    elif profile["sha256"] == "c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534":
+        frame, build, store, factory, clip_init, getter = (
+            160, 0x5CF1F0, 0x5CF4EA, 0x32DA80, 0x329BB0, 0x32ACD0)
+        construct, construct_start = 0x8DA46E, 0x8DA400
+        root_store = 0x329C0A
+        frame_update = 0x5D0A30
+        chara_name = 0xC76290
     else:
         frame, build, store, factory, clip_init, getter = (
             160, 0x5CF1B0, 0x5CF4AA, 0x32DA80, 0x329BB0, 0x32ACD0)

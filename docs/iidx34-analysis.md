@@ -1,11 +1,15 @@
 # IIDX 34 results hook: evidence and implementation
 
 Recorded 2026-10-20. Analysis input:
-`C:\Users\BeatMania IIDX LM\Downloads\bm2dx.dll`, 18,200,216 bytes.
+`C:\Users\BeatMania IIDX LM\Downloads\010-0916bm2dx.dll`, 18,200,216 bytes.
 SHA-256 `3755587f44785effe5008f74cfe7dccbdf423ad09feead48e00a90f78a42fe83`.
 Image base `0x180000000`, image size `0xc5ff000`. All addresses below are RVAs.
 Object offsets are decimal. The repository uses the user's 20260917 build label;
 sp2xpatcher identifies the PE as `LDJ-6aa23d57_b02b3c`, 2026-09-16 (010).
+The later `010-0917` executable
+(`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`) is a
+separate exact-build profile documented in
+[IIDX 34 / 010-0917](iidx34-010-0917-analysis.md).
 
 ## Evidence
 
@@ -85,7 +89,7 @@ constructor, and calls the non-deleting destructor before freeing storage.
 Runtime guards in `src/profiles/iidx34-20260917.json` cover every directly called native function
 and all three modified vtable slots. File SHA-256 must match before memory hooks are
 installed. Unknown loaded entry-byte mismatches and already replaced slots are rejected.
-The verified MinHook relay form is recognized for both profiles; see the
+The verified MinHook relay form is recognized for every supported profile; see the
 [2026-10-21 compatibility investigation](iidx33-hook-compatibility.md).
 Unrelated in-memory patches may coexist if they do not alter those guards.
 The DLL file is never patched.

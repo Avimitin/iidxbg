@@ -67,8 +67,9 @@ The original results vtable hooks continue independently.
 
 ## Validation and remaining unknowns
 
-Read the independent [IIDX 33](iidx33-background-surfaces.md) and
-[IIDX 34](iidx34-background-surfaces.md) records for hashes, ABI and RVAs.
+Read the independent [IIDX 33](iidx33-background-surfaces.md),
+[IIDX 34 / 20260917](iidx34-background-surfaces.md) and
+[IIDX 34 / 010-0917](iidx34-010-0917-analysis.md) records for hashes, ABI and RVAs.
 `verify-surfaces.py` checks static paths, every runtime entry guard and AFP
 imports. `smoke-attach.py` installs all hooks in a private mapped image without
 executing the game, and checks rejection of modified code.

@@ -5,7 +5,7 @@
 Analysis date: 2026-10-20. “Score page” is interpreted as the **per-song results
 screen**, not music selection, gameplay BGA, or a course's overall results.
 
-Target: `C:\Users\BeatMania IIDX LM\Downloads\bm2dx.dll`.
+Target: `C:\Users\BeatMania IIDX LM\Downloads\010-0916bm2dx.dll`.
 SHA-256: `3755587f44785effe5008f74cfe7dccbdf423ad09feead48e00a90f78a42fe83`.
 Size: 18,200,216 bytes. Preferred image base: `0x180000000`.
 All native addresses below are **RVAs**; object offsets are decimal.
@@ -246,7 +246,7 @@ credentials, upload or server-side mutation.
 Using the existing local analysis environment:
 
 ```powershell
-analysis/iidx34-tools/Scripts/python.exe scripts/verify-iidx34-result-background.py 'C:\Users\BeatMania IIDX LM\Downloads\bm2dx.dll'
+analysis/iidx34-tools/Scripts/python.exe scripts/verify-iidx34-result-background.py 'C:\Users\BeatMania IIDX LM\Downloads\010-0916bm2dx.dll'
 ```
 
 Dependencies: `pefile`, `capstone`. The script checks SHA-256, RTTI/vtable

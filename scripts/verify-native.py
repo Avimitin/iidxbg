@@ -117,6 +117,57 @@ def main():
         print("Offline evidence only: no hook, GPU upload, layout or frame-time validation.")
         return
 
+    if profile["sha256"] == "c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534":
+        table(0xD72950, ".?AVCStageResultScene@@",
+              {16: 0x9140C0, 17: 0x9155C0, 18: 0x915B50, 27: 0x915A50})
+        table(0xD70598, ".?AVStageResultDrawBg@@",
+              {0: 0x906D70, 1: 0x906DA0, 2: 0x906EB0})
+        table(0xD9B358, ".?AVAfpTextureEx@@", {0: 0xA4FB20})
+        require(profile["layout"] == dict(scene_vtable=0xD72950, scene_background=264,
+                                          background_archive=272, background_movie=296),
+                "IIDX 34 / 010-0917 layout profile")
+        for site, target in [(0x911F15, 0x906B80),
+                             (0x907014, 0x81EA30), (0x907037, 0x329F30),
+                             (0x907047, 0x32A460), (0x90704E, 0x32A1C0),
+                             (0xA4F9C9, 0x344B60), (0xA4FA35, 0x344EA0),
+                             (0x63DAAD, 0x329E50)]:
+            callsite(site, target)
+        for site, target, value in [(0x90700A, 0xD70620, b"illust\0"),
+                                    (0x907030, 0xCA56F0, b"result_bg\0")]:
+            insn = next(md.disasm(pe.get_data(site, 7), base + site))
+            operand = insn.operands[1]
+            require(insn.mnemonic == "lea" and operand.type == capstone.CS_OP_MEM
+                    and operand.mem.base == capstone.x86.X86_REG_RIP
+                    and insn.address + insn.size + operand.mem.disp == base + target,
+                    f"Unexpected string reference at {site:x}")
+            require(pe.get_data(target, len(value)) == value, "Unexpected string")
+        require(pe.get_data(0x911F0E, 7) == bytes.fromhex("488d8e08010000"),
+                "Background no longer at scene +264")
+        require(pe.get_data(0x907021, 7) == bytes.fromhex("498b9510010000"),
+                "Archive resource no longer at background +272")
+        require({0x620B10, 0x818F20} <= calls(0x906B80),
+                "Background archive construction/loading path changed")
+        require({0xA4FD80, 0x329E50} <= calls(0x63DA20),
+                "Existing descriptor binding example changed")
+        require({0x344B60, 0x344EA0} <= calls(0xA4F8E0),
+                "Texture wrapper no longer registers and builds a descriptor")
+        require(0x344C30 in calls(0xA4FA70),
+                "Texture destructor no longer unregisters its handle")
+        getter = list(md.disasm(pe.get_data(0xA4FD80, 5), base + 0xA4FD80))
+        require(getter[0].mnemonic == "lea"
+                and getter[0].operands[1].type == capstone.CS_OP_MEM
+                and getter[0].operands[1].mem.disp == 24
+                and getter[1].mnemonic == "ret", "Descriptor getter changed")
+        for rva in (0x329E50, 0x329F30):
+            require(any(i.mnemonic == "call"
+                        and i.operands[0].type == capstone.CS_OP_MEM
+                        and i.operands[0].mem.base == capstone.x86.X86_REG_RIP
+                        and i.address + i.size + i.operands[0].mem.disp == base + 0xC66CA8
+                        for i in function(rva)), "AFP texture binding import changed")
+        print("PASS: IIDX 34 / 010-0917 RTTI, scene ownership, binding, texture lifecycle")
+        print("Offline evidence only: no hook, GPU upload, layout or frame-time validation.")
+        return
+
     table(0xD72950, ".?AVCStageResultScene@@",
           {16: 0x914080, 17: 0x915580, 18: 0x915B10, 27: 0x915A10})
     table(0xD70598, ".?AVStageResultDrawBg@@",

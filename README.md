@@ -5,13 +5,14 @@ results illustration** with a random local image or an image from Konachan or Ya
 It prepares images in the background and keeps one image fixed for each results
 visit. Downloaded images are saved in your configured folder.
 
-One DLL supports the inspected **IIDX 33 / 20260812** and
-**IIDX 34 / 20260917** x64 builds, selected automatically by exact SHA-256.
+One DLL supports the inspected **IIDX 33 / 20260812**, **IIDX 34 / 20260917**
+and **IIDX 34 / 010-0917** x64 builds, selected automatically by exact SHA-256.
 Other builds are refused. Fingerprints and native evidence:
-[IIDX 33](docs/iidx33-analysis.md), [IIDX 34](docs/iidx34-analysis.md).
+[IIDX 33](docs/iidx33-analysis.md), [IIDX 34 / 20260917](docs/iidx34-analysis.md),
+[IIDX 34 / 010-0917](docs/iidx34-010-0917-analysis.md).
 Requires spice2x with **Spice SDK v0.4 D3D9 callbacks**.
 The user has confirmed image display and corrected placement in **IIDX 33**.
-**IIDX 34 has only offline validation**; broader stability testing remains.
+**Both IIDX 34 builds have only offline validation**; broader stability testing remains.
 It targets the native `illust` area, which may be
 masked or cropped by the game.
 
@@ -53,7 +54,7 @@ keep the last valid settings, and the current results image stays fixed.
 Version 0.2.0 also supports song selection, SUDDEN+, LIFT/lower cover and
 target-score graph artwork. Enable their individual switches in `[surfaces]`
 in the commented `iidxbg.toml`; they default to false. These new hooks still
-need in-game testing on both supported builds. See [surface behavior and testing](docs/background-surfaces.md).
+need in-game testing on all supported builds. See [surface behavior and testing](docs/background-surfaces.md).
 
 Each background can use its own folder or supported Moebooru site through
 `[sources.<surface>]` overrides. `moebooru.max_images` optionally removes oldest

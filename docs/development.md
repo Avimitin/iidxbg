@@ -37,7 +37,8 @@ and types, duplicate keys, relative path resolution, malformed/wrong DLL rejecti
 limits/channel conversion/crop, URL boundaries, saved-file preservation, and
 visit freezing/fallback. These cannot validate native callbacks or GPU reset
 inside IIDX. See the [architecture](architecture.md) and native evidence for
-[IIDX 33](iidx33-analysis.md) / [IIDX 34](iidx34-analysis.md).
+[IIDX 33](iidx33-analysis.md), [IIDX 34 / 20260917](iidx34-analysis.md) and
+[IIDX 34 / 010-0917](iidx34-010-0917-analysis.md).
 
 With a supported game DLL available locally, run `scripts/smoke-attach.py` in
 `native`, `chain` and `bad-tail` modes as documented in
@@ -53,8 +54,9 @@ The additional [background-surface investigation](background-surfaces.md)
 covers song selection, SUDDEN+, LIFT and the gameplay target graph.
 `python scripts/verify-surfaces.py path/to/bm2dx.dll` reproduces its static
 anchors using `pefile` and `capstone`. These checks now cover the optional runtime surface hooks. Build-specific evidence is recorded for
-[33 / 20260812](iidx33-background-surfaces.md) and
-[34 / 20260917](iidx34-background-surfaces.md).
+[33 / 20260812](iidx33-background-surfaces.md),
+[34 / 20260917](iidx34-background-surfaces.md) and
+[34 / 010-0917](iidx34-010-0917-analysis.md).
 
 `scripts/package.ps1` copies the built DLL, repository-default commented TOML, licenses,
 and diagnostic image into `dist/iidxbg`, then produces a ZIP. It preserves an

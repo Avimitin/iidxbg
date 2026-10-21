@@ -90,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_original_and_preserved_entry_chains_for_both_profiles() {
+    fn accepts_original_and_preserved_entry_chains_for_all_profiles() {
         for p in crate::profile::supported() {
             for guard in p.guards {
                 let original = hex::decode(guard.hex).unwrap();
