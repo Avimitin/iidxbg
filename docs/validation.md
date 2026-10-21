@@ -601,3 +601,30 @@ build passed.
 Release `target/release/iidxbg.dll` SHA-256:
 `14c1c8098fddd74a63c07c5fc2b16d6346304bec164d7993b84f55705c88fea6`.
 The `dist` release artifacts were not refreshed by this change.
+
+### In-game feedback round 5 (2026-10-22)
+
+The user described the actual concentration view: a **full-screen static image
+on the secondary display** plus a small "CONCENTRATION MODE" line. That is the
+sub-monitor presentation, like the premium background, not a texture inside the
+named customization clip. The bind diagnostics agree: the named clip has no AFP
+node and element 0 has no background clip at all.
+
+The concentration replacement now uses the same mechanism as premium: create an
+owned sprite at the window priority (6, the id passed to the layer factory),
+copy the position/origin/scale/color of the window element layer, hide both
+native elements and show the sprite. It is recreated on every native show and
+removed on hide, disable or device loss.
+
+Known trade-off: if the "CONCENTRATION MODE" line is part of the hidden element
+layer it disappears with the native image; the next in-game check must confirm
+whether the line is a separate node. The premium replacement is also recreated
+from the movie dispatcher after the pool release, so it should survive song
+loading/gameplay.
+
+Offline re-verification: 27 tests, clippy, `cargo fmt --check` and the release
+build passed.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`3c2d37572023387e7394b2938693b0e755c2bd5f95844339821a00d2e7a20dd7`.
+The `dist` release artifacts were not refreshed by this change.
