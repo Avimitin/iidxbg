@@ -51,7 +51,7 @@ keep the last valid settings, and the current results image stays fixed.
 
 ## Additional backgrounds
 
-Version 0.2.0 also supports song selection, SUDDEN+, LIFT/lower cover and
+Version 0.2.1 also supports song selection, SUDDEN+, LIFT/lower cover and
 target-score graph artwork. Enable their individual switches in `[surfaces]`
 in the commented `iidxbg.toml`; they default to false. These new hooks still
 need in-game testing on all supported builds. See [surface behavior and testing](docs/background-surfaces.md).
@@ -69,7 +69,7 @@ copy of the image. The shipped config enables overrides for six surfaces, using 
 local folders under `iidxbg` and download folders under `iidxbg/downloads`.
 
 
-Version 0.2.0 also supports selection-character visibility and an
+Version 0.2.1 also supports selection-character visibility and an
 optional local replacement image through `[selection]`. See the commented
 config and [character options](docs/configuration.md#live-selection-frame-character).
 These controls reload through scene events, with no periodic file watcher.

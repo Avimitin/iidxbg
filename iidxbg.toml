@@ -88,7 +88,7 @@ frame_chara = true
 # This is a static replacement; native character animation is not copied.
 frame_chara_image = ''
 
-# Experimental additional surfaces in version 0.2.0.
+# Experimental additional surfaces in version 0.2.1.
 # Set individual switches to true; omitted switches default to false.
 # Each enabled surface chooses independently. Settings above are inherited unless
 # overridden below. Decode, blur and downloads all run on the image worker.

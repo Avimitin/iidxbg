@@ -1,6 +1,6 @@
 # Additional background surfaces
 
-Implemented in **0.2.0**, for the exact IIDX 33 and 34 fingerprints in the
+Implemented in **0.2.1**, for the exact IIDX 33 and 34 fingerprints in the
 build-specific records. In-game validation of
 these new surfaces is pending on both versions.
 

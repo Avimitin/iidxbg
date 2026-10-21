@@ -654,3 +654,24 @@ passed.
 Release `target/release/iidxbg.dll` SHA-256:
 `08891ae5b19e4caac30c9a2f4ba39586411f2f42b793655aeb73d3e3825c6948`.
 The `dist` release artifacts were not refreshed by this change.
+
+## Version 0.2.1 release preparation (2026-10-22)
+
+Bumped Cargo manifest/lockfile to 0.2.1 and updated current version references.
+This release adds the IIDX 34 / 010-0917 exact-build profile, premium-area and
+concentration background surfaces, the native archive-restore hook, and the
+event-driven (pointer-compare) frame path.
+
+- 27 tests, clippy with warnings denied, `cargo fmt --all --check` and the
+  optimized release build passed.
+- `verify-native.py`, `verify-surfaces.py`, `verify-frame-chara.py` and
+  `verify-origin.py` passed on the exact DLL.
+- `smoke-attach.py` passed in `native`, `chain` and `bad-tail` modes for the new
+  profile; the earlier IIDX 34 profile still passed in `native` mode.
+- In-game: the user confirmed premium-area and concentration replacements on
+  the 010-0917 build, with short stock flashes still under investigation.
+
+Release `target/release/iidxbg.dll` SHA-256:
+`1812cb49231034eddf489d7f21f849963d4e993d06a33e1d28dae74d0f6c4927`.
+The `dist` release artifacts were not refreshed locally; the tag build produces
+the GitHub release ZIP.
