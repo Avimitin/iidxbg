@@ -13,6 +13,11 @@ continues to be used. At startup there is no previous configuration, so an
 invalid file still prevents startup. The shipped file is a complete starting
 configuration.
 
+An optional GUI in `ui/` edits this file without dropping comments. It writes
+valid changes immediately, exposes per-surface inheritance and reports the image
+it would prepare next. The results surface still follows the top-level `enabled`
+switch; see [the UI README](../ui/README.md).
+
 | Setting | Meaning |
 |---|---|
 | `enabled` | False skips image preparation and selects stock artwork for the next visit; lifecycle hooks remain active so true can re-enable without restarting |

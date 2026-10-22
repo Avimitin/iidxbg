@@ -49,6 +49,24 @@ keep the last valid settings, and the current results image stays fixed.
 [Version design](docs/architecture.md)
 
 
+## Configuration GUI
+
+`ui/` contains an optional Windows editor built with GPUI and
+[GPUI Kit](https://github.com/longbridge/gpui-kit). It is a separate binary; the
+plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
+
+The gallery is a full-bleed Metro board: four 16:9 surface tiles along the top,
+four tall portrait columns below, and hairlines that cut the entire content
+area. The grid only owns the regions and dividers; each image module is centered
+inside its region and never paints a tile fill. Hovering a region reveals its
+floating description. Disabled regions use a transparent placeholder, a surface
+glyph, and an eye-off badge instead of a background panel. Click a region for a
+centered editor, or use the icon rail for global options. Valid changes are
+written to `iidxbg.toml` immediately with `toml_edit`, preserving comments. The
+results surface follows the global `enabled` switch; the six extra surfaces keep
+their own `[surfaces]` switches. See [ui/README.md](ui/README.md) for build steps
+and behaviour notes.
+
 ## Additional backgrounds
 
 Version 0.2.1 also supports song selection, SUDDEN+, LIFT/lower cover and

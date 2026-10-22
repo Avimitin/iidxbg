@@ -1,0 +1,42 @@
+# iidxbg test fixture.
+# Comments and blank lines must survive a GUI edit.
+
+enabled = true
+source = "local"
+local_directory = 'iidxbg'
+recursive = false
+
+[moebooru]
+# API endpoint.
+domain = "konachan.net"
+tags = "rating:safe landscape"
+save_directory = 'iidxbg/downloads'
+page_max = 5
+timeout_seconds = 20
+max_images = 0
+
+[image]
+width = 1920
+height = 1080
+fit = "contain"
+max_download_mb = 24
+max_source_pixels = 40000000
+
+[surfaces]
+song_select = false
+sudden_plus = false
+lift = false
+target_graph = false
+premium_area = false
+concentration = false
+
+[sources.results]
+source = "local"
+local_directory = 'iidxbg/results'
+fit = "contain"
+
+[sources.results.moebooru]
+save_directory = 'iidxbg/downloads/results'
+
+# Empty means concentration reuses the prepared premium-area image.
+[sources.concentration]
