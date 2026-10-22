@@ -1,6 +1,6 @@
 # Configuration
 
-This document describes version 0.2.1, including per-surface sources, download
+This document describes version 0.2.2, including per-surface sources, download
 retention, blurred contain fill and scene-driven reload. The canonical API section is
 `[moebooru]`; unknown sections/source modes are rejected.
 
@@ -232,7 +232,7 @@ the whole image; matching the canvas aspect ratio avoids unused space. A per-sur
 
 ## Live selection frame character
 
-Version 0.2.1 accepts:
+Version 0.2.2 accepts:
 
 ```toml
 [selection]

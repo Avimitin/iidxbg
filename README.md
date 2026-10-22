@@ -1,96 +1,75 @@
 # iidxbg
 
-An experimental `iidxbg.dll` plugin for spice2x that replaces the **per-song
-results illustration** with a random local image or an image from Konachan or Yande.re.
-It prepares images in the background and keeps one image fixed for each results
-visit. Downloaded images are saved in your configured folder.
+给 **beatmania IIDX (spice2x)** 用的背景替换插件。
 
-One DLL supports the inspected **IIDX 33 / 20260812**, **IIDX 34 / 20260917**
-and **IIDX 34 / 010-0917** x64 builds, selected automatically by exact SHA-256.
-Other builds are refused. Fingerprints and native evidence:
-[IIDX 33](docs/iidx33-analysis.md), [IIDX 34 / 20260917](docs/iidx34-analysis.md),
-[IIDX 34 / 010-0917](docs/iidx34-010-0917-analysis.md).
-Requires spice2x with **Spice SDK v0.4 D3D9 callbacks**.
-The user has confirmed image display and corrected placement in **IIDX 33**.
-**Both IIDX 34 builds have only offline validation**; broader stability testing remains.
-It targets the native `illust` area, which may be
-masked or cropped by the game.
+把游戏里的结算插画换成你喜欢的图片；也可以进一步替换选曲画面、SUDDEN+、LIFT、目标分数图和 Premium/集中模式背景。图片可以来自本地文件夹，也可以从 Konachan / Yande.re 在线获取。
 
-## Install and try
+<img src="docs/config-gui.png" alt="iidxbg 配置界面" width="900">
 
-1. Download the `iidxbg-<version>-windows-x64.zip` asset from
-   [GitHub Releases](https://github.com/Avimitin/iidxbg/releases) and extract it.
-   Keep `iidxbg.dll`, `iidxbg.toml` and the `iidxbg` directory together.
-2. Add `-k "D:\your\folder\iidxbg.dll"` to your existing spice64 launch command.
-   Keep any other plugin arguments you already use.
-3. The default configuration uses local images. The package includes a generated
-   diagnostic image so the first test needs no network. Add your own `.jpg`,
-   `.jpeg` or `.png` files to the matching subfolder in `iidxbg` (for example, `iidxbg/results`);
-   remove its diagnostic image when done.
-4. Play a song and inspect the ordinary results screen. Check `iidxbg.log`
-   alongside the DLL for attachment, image preparation and upload messages.
+*配置界面示意：用本地图片填充后的组件总览。*
 
-Scene entry/exit hooks request preparation on the background worker, including
-prefetching after selection exit ahead of the song's results. Late/failed downloads keep the previous image or stock
-background. No image should change halfway through a results visit.
+## 这是什么
 
-To download images, change `source = "local"` to `source = "remote"` in the desired
-`[sources.<surface>]` section of `iidxbg.toml`. In `[moebooru]`, set `domain` to `"konachan.net"` (default),
-`"konachan.com"`, or `"yande.re"`. `"mixed"` randomly chooses local or the
-selected remote site and falls back to the other source on failure.
-Set `save_directory` in that surface's `[sources.<surface>.moebooru]` section to your download folder,
-for example `"D:/Pictures/IIDX/Remote"`. Relative paths are relative to the DLL,
-not the launcher's working directory. The TOML is reread
-when scene events request image preparation, so saved edits apply without restarting. Invalid edits
-keep the last valid settings, and the current results image stays fixed.
+- 替换 IIDX 的 **结算画面插画**（默认功能）
+- 可选替换 **选曲画面、SUDDEN+、LIFT、目标分数图** 等位置
+- 支持本地图片、在线图源，以及本地/在线混合
+- 附带 **iidxbg-config.exe** 配置界面，不需要手动编辑配置文件
+- 每次有效修改立即保存，没有“保存”按钮
 
-[Configuration](docs/configuration.md) ·
-[Build and test](docs/development.md) ·
-[Version design](docs/architecture.md)
+## 怎么用
 
+1. 从 [GitHub Releases](https://github.com/Avimitin/iidxbg/releases) 下载最新 ZIP。
+   ZIP 里只有三个文件：
+   - `iidxbg.dll`
+   - `iidxbg.toml`
+   - `iidxbg-config.exe`
 
-## Configuration GUI
+2. 把这三个文件解压到 **spice2x 游戏目录**。
 
-`ui/` contains an optional Windows editor built with GPUI and
-[GPUI Kit](https://github.com/longbridge/gpui-kit). It is a separate binary; the
-plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
+3. 双击 `iidxbg-config.exe`：
+   - 给想替换的组件选择本地图片文件夹；
+   - 或者把图源切换为 Konachan / Yande.re；
+   - 修改会自动保存到旁边的 `iidxbg.toml`。
 
-The gallery is a full-bleed Metro board: four 16:9 surface tiles along the top,
-four shorter portrait columns below, and hairlines that cut the entire content
-area. The top band reserves at least 30% of the content height, giving the wide
-surfaces more room while the lower columns stay clearly portrait. The grid only owns the regions and dividers; each image module is centered
-inside its region and never paints a tile fill. Hovering a region reveals its
-floating description. Disabled regions use a transparent placeholder, a surface
-glyph, and an eye-off badge instead of a background panel. Every panel is black
-with a hairline outline; green is an accent, never a secondary fill. Click a
-region for a centered editor, or use the icon rail for global options. Valid
-changes are written to `iidxbg.toml` immediately with `toml_edit`, preserving
-comments. The results surface follows the global `enabled` switch; the six extra
-surfaces keep their own `[surfaces]` switches. See [ui/README.md](ui/README.md)
-for build steps and behaviour notes.
+4. 在 spice64 的启动参数里加上：
 
-## Additional backgrounds
+   ```text
+   -k "你的游戏目录\iidxbg.dll"
+   ```
 
-Version 0.2.1 also supports song selection, SUDDEN+, LIFT/lower cover and
-target-score graph artwork. Enable their individual switches in `[surfaces]`
-in the commented `iidxbg.toml`; they default to false. These new hooks still
-need in-game testing on all supported builds. See [surface behavior and testing](docs/background-surfaces.md).
+   保留你原有的其他启动参数。
 
-The **premium-area background** and **concentration-mode background** are
-additional opt-in replacements for the inspected IIDX 34 / 010-0917 build.
-Both are prepared at their native 1280x720 size; concentration reuses the
-premium-area image unless `[sources.concentration]` adds an override. Other
-exact-build profiles ignore these two switches.
+5. 进入游戏即可。没有配置到图片、或关闭某个组件时，会保留游戏原图。
 
-Each background can use its own folder or supported Moebooru site through
-`[sources.<surface>]` overrides. `moebooru.max_images` optionally removes oldest
-managed downloads, and `fit = "contain"` fills borders with a heavily blurred
-copy of the image. The shipped config enables overrides for six surfaces, using separate
-local folders under `iidxbg` and download folders under `iidxbg/downloads`.
+> ZIP 不包含示例图片。第一次打开配置程序时，本地预览为空是正常的；选好文件夹或在线图源后就会出现图片。
 
+## 支持哪些版本
 
-Version 0.2.1 also supports selection-character visibility and an
-optional local replacement image through `[selection]`. See the commented
-config and [character options](docs/configuration.md#live-selection-frame-character).
-These controls reload through scene events, with no periodic file watcher.
-Any valid image dimensions are accepted. In-game validation remains pending.
+| 游戏版本 | 状态 |
+|---|---|
+| IIDX 33 / 20260812 | 已实机确认 |
+| IIDX 34 / 20260917 | 离线验证 |
+| IIDX 34 / 010-0917 | 离线验证 |
+
+要求：
+
+- Windows x64
+- spice2x，且支持 **Spice SDK v0.4 D3D9 callbacks**
+- 只支持上表中的 x64 版本；其他版本不会加载
+
+补充说明：
+
+- **结算画面**：三个支持版本都可用。
+- **选曲画面、SUDDEN+、LIFT、目标分数图**：需要单独开启，仍在继续测试。
+- **Premium 区域 / 集中模式**：仅支持 IIDX 34 / 010-0917。
+- IIDX 34 目前只有离线验证；实际游戏内的显示位置可能会被游戏本身裁剪或遮罩。
+
+## 下载
+
+最新版本：[GitHub Releases](https://github.com/Avimitin/iidxbg/releases)
+
+当前版本：**0.2.2**
+
+## License
+
+MIT

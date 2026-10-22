@@ -69,7 +69,10 @@ Output: `ui/target/release/iidxbg-config.exe`.
 
 ## Run
 
-Keep the executable beside `iidxbg.toml`, or pass the file explicitly:
+The release ZIP places `iidxbg-config.exe` beside `iidxbg.toml`. Extract the ZIP
+contents into the game directory, then double-click `iidxbg-config.exe`; no
+arguments are needed. For a manual build, keep the executable beside
+`iidxbg.toml`, or pass the file explicitly:
 
 ```powershell
 .\iidxbg-config.exe --config ..\iidxbg.toml

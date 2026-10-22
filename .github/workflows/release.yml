@@ -17,7 +17,7 @@ jobs:
   build:
     name: Windows x64 package
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 60
     defaults:
       run:
         shell: pwsh
@@ -35,7 +35,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot select Rust toolchain' }
 
       - name: Check formatting
-        run: cargo fmt --all --check
+        run: |
+          cargo fmt --all --check
+          if ($LASTEXITCODE -ne 0) { throw 'Plugin formatting check failed' }
+          cargo fmt --manifest-path ui/Cargo.toml --check
+          if ($LASTEXITCODE -ne 0) { throw 'GUI formatting check failed' }
 
       - name: Test
         run: ./scripts/build.ps1 -CargoArgs @('test', '--locked', '--all-targets')
@@ -46,12 +50,19 @@ jobs:
       - name: Build release
         run: ./scripts/build.ps1
 
-      - name: Check DLL and generate dependency notices
+      - name: Test configuration GUI
+        run: ./ui/scripts/build.ps1 -CargoArgs @('test', '--release', '--locked')
+
+      - name: Clippy configuration GUI
+        run: ./ui/scripts/build.ps1 -CargoArgs @('clippy', '--release', '--locked', '--all-targets', '--', '-D', 'warnings')
+
+      - name: Build configuration GUI
+        run: ./ui/scripts/build.ps1 -CargoArgs @('build', '--release', '--locked')
+
+      - name: Check DLL
         run: |
           python scripts/smoke-dll.py target/release/iidxbg.dll
           if ($LASTEXITCODE -ne 0) { throw 'DLL smoke test failed' }
-          python scripts/notices.py
-          if ($LASTEXITCODE -ne 0) { throw 'License notice generation failed' }
 
       - name: Package
         id: package

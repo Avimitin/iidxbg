@@ -645,7 +645,7 @@ impl AppView {
         if !self.slot_is_current(concentration_index, concentration_spec) {
             self.start_preview(
                 Surface::Concentration,
-                Surface::PremiumArea,
+                concentration_spec.target,
                 concentration_spec.fingerprint.clone(),
                 cx,
             );
