@@ -7,19 +7,24 @@ binary; the plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
 ## What it does
 
 - **Metro gallery** — the board is full-bleed, with no page padding or hero.
-  Four 16:9 surface tiles form the top band; four tall portrait columns below
-  continue the same hairline grid to the window edges. The last lower column is
-  a compact global-settings shortcut.
+  Four 16:9 surface tiles form the top band, which now reserves at least 30% of
+  the content height; four shorter portrait columns below continue the same
+  hairline grid to the window edges. The last lower column is a compact
+  global-settings shortcut.
 - **Grid / image separation** — the grid owns only the region geometry and the
   dividing lines. Each image module is a separate layer that centres one surface
   inside its region with `ObjectFit::Contain`; it never paints a tile fill.
 - **Hover details** — the regions carry no permanent footer. Hovering one lifts a
   compact floating panel with its name, status, source/fit, and an
   “打开配置” action; clicking anywhere in the region opens the editor.
-- **Disabled placeholder** — an unenabled region shows a transparent wireframe
-  glow plus a surface glyph and eye-off badge. There is no added panel fill; the
+- **Disabled placeholder** — an unenabled region shows a thin neutral outline
+  plus a surface glyph and eye-off badge. There is no added panel fill; the
   page colour remains the only background. Enabled regions fetch the next image
   through the plugin's own local/Moobooru provider and centre it in the region.
+- **Black-only surfaces** — the page, sidebar, panels, inputs, pills, and hover
+  card are black. Separation comes from one-pixel outlines; green is limited to
+  icons, selected labels/borders, switches, and status dots rather than a tinted
+  secondary fill.
 - **Centered editor** — clicking a region opens a centered panel. Source overrides,
   fit, recursion, and Moebooru fields can each inherit the global value or be
   overridden. The results surface follows the global master switch because the
@@ -27,6 +32,10 @@ binary; the plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
 - **Global options page** — master switch, source, local directory, Moebooru
   account-free API settings, output size/fit/limits, and the selection-character
   options.
+- **Native folder picker** — every local/download directory field has a folder
+  button that opens the Windows folder picker. Choosing a folder fills the input
+  and writes the selected path immediately; cancel leaves the current value
+  untouched.
 - **Immediate, comment-preserving writes** — there is no Save button. Valid
   changes are written atomically to `iidxbg.toml` on every edit, using
   `toml_edit` so the shipped explanatory comments and unknown whitespace stay

@@ -214,7 +214,7 @@ impl SurfaceEditor {
         );
     }
 
-    fn input_for(&self, field: SurfaceTextField) -> &Entity<InputState> {
+    pub(crate) fn input_for(&self, field: SurfaceTextField) -> &Entity<InputState> {
         match field {
             SurfaceTextField::LocalDirectory => &self.inputs.local_directory,
             SurfaceTextField::Tags => &self.inputs.tags,
@@ -847,9 +847,15 @@ pub(crate) fn render_editor(
             Button::new("editor-done")
                 .small()
                 .primary()
-                .bg(theme::accent())
-                .text_color(theme::page_bg())
-                .hover(|this| this.bg(theme::accent_hover()).text_color(theme::page_bg()))
+                .bg(theme::page_bg())
+                .border_1()
+                .border_color(theme::accent())
+                .text_color(theme::accent())
+                .hover(|this| {
+                    this.bg(theme::page_bg())
+                        .border_color(theme::accent_hover())
+                        .text_color(theme::accent_hover())
+                })
                 .label("完成")
                 .on_click(cx.listener(|this, _, _, cx| this.close_editor(cx))),
         );
@@ -894,9 +900,9 @@ fn concentration_share_panel(cx: &mut Context<AppView>) -> AnyElement {
         .gap_3()
         .rounded(px(12.))
         .overflow_hidden()
-        .bg(theme::accent_soft())
+        .bg(theme::page_bg())
         .border_1()
-        .border_color(theme::accent().opacity(0.18))
+        .border_color(theme::accent().opacity(0.28))
         .child(
             h_flex()
                 .items_center()
@@ -1125,6 +1131,16 @@ fn override_path_control(
                     .cleanable(true),
             )
             .child(
+                Button::new(element_id("surface-browse", field_name(field)))
+                    .small()
+                    .ghost()
+                    .icon(Icon::new(IconName::FolderOpen).with_size(Size::Small))
+                    .tooltip("选择文件夹")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.pick_surface_directory(field, window, cx);
+                    })),
+            )
+            .child(
                 Button::new(element_id("surface-inherit", field_name(field)))
                     .small()
                     .ghost()
@@ -1143,6 +1159,16 @@ fn override_path_control(
                     .flex_1()
                     .min_w_0()
                     .child(widgets::muted_path(effective.to_owned())),
+            )
+            .child(
+                Button::new(element_id("surface-browse", field_name(field)))
+                    .small()
+                    .ghost()
+                    .icon(Icon::new(IconName::FolderOpen).with_size(Size::Small))
+                    .tooltip("选择文件夹")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.pick_surface_directory(field, window, cx);
+                    })),
             )
             .child(
                 Button::new(element_id("surface-custom", field_name(field)))

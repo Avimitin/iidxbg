@@ -175,45 +175,29 @@ pub fn render_image(prepared: Prepared) -> Arc<RenderImage> {
     let Prepared {
         width,
         height,
-        mut bgra,
+        bgra,
         ..
     } = prepared;
-    for pixel in bgra.as_chunks_mut::<4>().0 {
-        pixel.swap(0, 2);
-    }
-    let rgba = image::RgbaImage::from_raw(width, height, bgra)
+    // gpui's `RenderImage` stores BGRA bytes even though its `Frame` wrapper is
+    // typed as `RgbaImage`; pass the prepared buffer through unchanged.
+    let bgra = image::RgbaImage::from_raw(width, height, bgra)
         .unwrap_or_else(|| image::RgbaImage::new(1, 1));
-    Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
+    Arc::new(RenderImage::new(vec![image::Frame::new(bgra)]))
 }
 
-/// Build an original, quiet placeholder image for a card. It has no text: the
-/// card overlays status copy in GPUI so it stays sharp at every scale.
-pub fn default_image(width: u32, height: u32, accent: [u8; 3]) -> Arc<RenderImage> {
+/// Build an original, quiet placeholder image for a card. It is transparent
+/// except for a one-pixel neutral outline: the page itself stays black, and the
+/// card overlays its icon/status in GPUI so it stays sharp at every scale.
+pub fn default_image(width: u32, height: u32) -> Arc<RenderImage> {
     let width = width.clamp(2, 1280);
     let height = height.clamp(2, 1280);
     let rgba = image::RgbaImage::from_fn(width, height, |x, y| {
-        let fx = x as f32 / width as f32;
-        let fy = y as f32 / height as f32;
-        let dx = fx - 0.34;
-        let dy = fy - 0.24;
-        let glow = (1.0 - (dx * dx + dy * dy).sqrt() * 2.15).max(0.0).powf(2.4);
-        let color = [
-            104.0 + accent[0] as f32 * glow * 0.14,
-            118.0 + accent[1] as f32 * glow * 0.14,
-            110.0 + accent[2] as f32 * glow * 0.14,
-        ];
-        let mut alpha = glow * 48.0;
-        let edge = (1.0 - fx * 0.06 - fy * 0.06).clamp(0.85, 1.0);
         let border = x == 0 || y == 0 || x + 1 == width || y + 1 == height;
         if border {
-            alpha = alpha.max(80.0);
+            image::Rgba([255, 255, 255, 22])
+        } else {
+            image::Rgba([0, 0, 0, 0])
         }
-        image::Rgba([
-            (color[0] * edge).clamp(0., 255.) as u8,
-            (color[1] * edge).clamp(0., 255.) as u8,
-            (color[2] * edge).clamp(0., 255.) as u8,
-            alpha.clamp(0., 96.) as u8,
-        ])
     });
     Arc::new(RenderImage::new(vec![image::Frame::new(rgba)]))
 }
@@ -234,6 +218,18 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = include_str!("testdata/minimal.toml");
+
+    #[test]
+    fn render_image_keeps_bgra_bytes_for_gpui() {
+        let prepared = Prepared {
+            label: "solid-red".into(),
+            width: 1,
+            height: 1,
+            bgra: vec![0, 0, 255, 255],
+        };
+        let rendered = render_image(prepared);
+        assert_eq!(rendered.as_bytes(0), Some(&[0, 0, 255, 255][..]));
+    }
 
     #[test]
     fn surface_canvases_follow_the_plugin_resolution_rules() {

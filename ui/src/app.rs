@@ -6,9 +6,9 @@ use std::{
 
 use async_channel::Sender;
 use gpui::{
-    App, Context, IntoElement, ObjectFit, ParentElement, RenderImage, SharedString, Styled,
-    Subscription, Window, div, img, linear_color_stop, linear_gradient,
-    prelude::FluentBuilder as _, px, relative,
+    App, Context, IntoElement, ObjectFit, ParentElement, PathPromptOptions, RenderImage,
+    SharedString, Styled, Subscription, Window, div, img, prelude::FluentBuilder as _, px,
+    relative,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -22,7 +22,7 @@ use toml_edit::DocumentMut;
 
 use crate::{
     editor,
-    editor::SurfaceEditor,
+    editor::{SurfaceEditor, SurfaceTextField},
     global::GlobalInputs,
     preview,
     preview::{PreviewFingerprint, PreviewOutcome, PreviewRequest, PreviewSpec},
@@ -93,7 +93,6 @@ impl AppView {
             preview::default_image(
                 (width as f32 * scale).round().max(2.0) as u32,
                 (height as f32 * scale).round().max(2.0) as u32,
-                theme::surface_rgb(surface),
             )
         });
 
@@ -390,6 +389,110 @@ impl AppView {
         self.commit_global(0, cx, |doc| {
             store::set_bool(doc, &["selection", "frame_chara"], value);
         });
+    }
+
+    pub(crate) fn pick_global_directory(
+        &mut self,
+        field: GlobalTextField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prompt = match field {
+            GlobalTextField::LocalDirectory => "选择本地图片目录",
+            GlobalTextField::SaveDirectory => "选择下载保存目录",
+            _ => return,
+        };
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(prompt.into()),
+        });
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let value = path.to_string_lossy().into_owned();
+            let _ = window_handle.update(cx, |_, window, app| {
+                let _ = this.update(app, |this, cx| {
+                    this.apply_picked_global_directory(field, value, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn pick_surface_directory(
+        &mut self,
+        field: SurfaceTextField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prompt = match field {
+            SurfaceTextField::LocalDirectory => "选择组件本地图片目录",
+            SurfaceTextField::SaveDirectory => "选择组件下载保存目录",
+            _ => return,
+        };
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(prompt.into()),
+        });
+        let window_handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let value = path.to_string_lossy().into_owned();
+            let _ = window_handle.update(cx, |_, window, app| {
+                let _ = this.update(app, |this, cx| {
+                    this.apply_picked_surface_directory(field, value, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn apply_picked_global_directory(
+        &mut self,
+        field: GlobalTextField,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = match field {
+            GlobalTextField::LocalDirectory => &self.global_inputs.local_directory,
+            GlobalTextField::SaveDirectory => &self.global_inputs.save_directory,
+            _ => return,
+        };
+        set_input(input, value.clone(), window, cx);
+        self.on_global_text(field, value, cx);
+    }
+
+    fn apply_picked_surface_directory(
+        &mut self,
+        field: SurfaceTextField,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((surface, input)) = self
+            .editor
+            .as_ref()
+            .map(|editor| (editor.surface, editor.input_for(field).clone()))
+        else {
+            return;
+        };
+        set_input(&input, value.clone(), window, cx);
+        self.on_surface_text(surface, field, value, cx);
     }
 
     pub(crate) fn open_editor(
@@ -693,11 +796,7 @@ impl AppView {
             .size(px(36.))
             .flex_shrink_0()
             .rounded(px(10.))
-            .bg(linear_gradient(
-                145.,
-                linear_color_stop(rgb(0x123021), 0.),
-                linear_color_stop(rgb(0x060b08), 1.),
-            ))
+            .bg(theme::page_bg())
             .border_1()
             .border_color(theme::line_strong())
             .flex()
@@ -718,11 +817,15 @@ impl AppView {
             .w(px(38.))
             .h(px(38.))
             .rounded(px(9.))
+            .border_1()
             .when(page == Page::Gallery, |this| {
-                this.bg(theme::accent_soft()).text_color(theme::accent())
+                this.bg(theme::page_bg())
+                    .border_color(theme::line_strong())
+                    .text_color(theme::accent())
             })
             .when(page != Page::Gallery, |this| {
-                this.text_color(theme::ink_soft())
+                this.border_color(theme::line_soft())
+                    .text_color(theme::ink_soft())
             })
             .on_click(cx.listener(|this, _, _, cx| this.go_to_gallery(cx)));
 
@@ -735,11 +838,15 @@ impl AppView {
             .w(px(38.))
             .h(px(38.))
             .rounded(px(9.))
+            .border_1()
             .when(page == Page::Global, |this| {
-                this.bg(theme::accent_soft()).text_color(theme::accent())
+                this.bg(theme::page_bg())
+                    .border_color(theme::line_strong())
+                    .text_color(theme::accent())
             })
             .when(page != Page::Global, |this| {
-                this.text_color(theme::ink_soft())
+                this.border_color(theme::line_soft())
+                    .text_color(theme::ink_soft())
             })
             .on_click(cx.listener(|this, _, _, cx| this.go_to_global(cx)));
 

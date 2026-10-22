@@ -46,11 +46,11 @@ impl AppView {
         let height = (viewport.height.as_f32() - TITLE_BAR_HEIGHT).max(240.);
         let cell_width = width / GRID_COLUMNS;
 
-        // The top band has four 16:9 tiles. Deriving its height from the image
-        // ratio keeps those four modules nearly frame-filling. The remaining
-        // lower band becomes four portrait columns, so the dividing line is
-        // also close to the tall surfaces' native ratio.
-        let top_height = (cell_width / WIDE_RATIO).clamp(height * 0.14, height * 0.34);
+        // The top band has four 16:9 tiles. Give it at least 30% of the content
+        // height so the wide surfaces get more breathing room; the remaining
+        // lower band becomes four portrait columns. The cap keeps a very short
+        // window from turning the top band into a second full-height row.
+        let top_height = (cell_width / WIDE_RATIO).clamp(height * 0.30, height * 0.38);
         let bottom_height = height - top_height;
 
         let mut modules = Vec::with_capacity(TOP_ROW.len() + BOTTOM_ROW.len() + 1);

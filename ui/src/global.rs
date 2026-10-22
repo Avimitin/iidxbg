@@ -264,9 +264,30 @@ impl AppView {
                 widgets::setting_row(
                     "本地目录",
                     "PNG/JPEG 文件夹。相对路径按 iidxbg.toml 所在目录解析。",
-                    Input::new(&self.global_inputs.local_directory)
-                        .cleanable(true)
-                        .w_full(),
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Input::new(&self.global_inputs.local_directory)
+                                .flex_1()
+                                .min_w_0()
+                                .cleanable(true),
+                        )
+                        .child(
+                            Button::new("browse-global-local")
+                                .small()
+                                .ghost()
+                                .icon(Icon::new(IconName::FolderOpen).with_size(Size::Small))
+                                .tooltip("选择文件夹")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.pick_global_directory(
+                                        app::GlobalTextField::LocalDirectory,
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
                 ),
                 widgets::setting_row(
                     "递归扫描子目录",
@@ -338,9 +359,30 @@ impl AppView {
                 widgets::setting_row(
                     "下载保存目录",
                     "成功解码后写入这里。相对路径按 iidxbg.toml 所在目录解析。",
-                    Input::new(&self.global_inputs.save_directory)
-                        .cleanable(true)
-                        .w_full(),
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Input::new(&self.global_inputs.save_directory)
+                                .flex_1()
+                                .min_w_0()
+                                .cleanable(true),
+                        )
+                        .child(
+                            Button::new("browse-global-save")
+                                .small()
+                                .ghost()
+                                .icon(Icon::new(IconName::FolderOpen).with_size(Size::Small))
+                                .tooltip("选择文件夹")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.pick_global_directory(
+                                        app::GlobalTextField::SaveDirectory,
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
                 ),
                 widgets::setting_row(
                     "随机页数上限",
@@ -631,9 +673,9 @@ impl AppView {
             .p_5()
             .gap_3()
             .rounded(px(14.))
-            .bg(theme::accent_soft().opacity(0.55))
+            .bg(theme::page_bg())
             .border_1()
-            .border_color(theme::accent().opacity(0.12))
+            .border_color(theme::accent().opacity(0.28))
             .child(
                 h_flex()
                     .items_center()

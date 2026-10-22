@@ -39,32 +39,46 @@ pub fn install(cx: &mut App) {
     Theme::update(cx, |theme| {
         theme.mode = ThemeMode::Dark;
         theme.shadow = false;
-        theme.colors.background = rgb(0x050706).into();
-        theme.colors.foreground = rgb(0xe6ede8).into();
-        theme.colors.border = rgb(0x26332b).into();
-        theme.colors.muted = rgb(0x151d18).into();
-        theme.colors.muted_foreground = rgb(0x8a978f).into();
-        theme.colors.primary = rgb(0x57d98a).into();
-        theme.colors.primary_hover = rgb(0x6fe79d).into();
-        theme.colors.primary_active = rgb(0x42c477).into();
-        theme.colors.primary_foreground = rgb(0x041008).into();
-        theme.colors.button_primary = rgb(0x57d98a).into();
-        theme.colors.button_primary_hover = rgb(0x6fe79d).into();
-        theme.colors.button_primary_active = rgb(0x42c477).into();
-        theme.colors.button_primary_foreground = rgb(0x041008).into();
-        theme.colors.accent = rgb(0x0f271a).into();
-        theme.colors.accent_foreground = rgb(0x6fe79d).into();
-        theme.colors.ring = rgb(0x3fbf72).into();
-        theme.colors.sidebar = rgb(0x040605).into();
-        theme.colors.sidebar_foreground = rgb(0xc9d4cc).into();
-        theme.colors.sidebar_border = rgb(0x212e26).into();
-        theme.colors.sidebar_accent = rgb(0x10271a).into();
-        theme.colors.sidebar_accent_foreground = rgb(0x6fe79d).into();
-        theme.colors.sidebar_primary = rgb(0x57d98a).into();
-        theme.colors.sidebar_primary_foreground = rgb(0x041008).into();
-        theme.colors.input = rgb(0x2b3a30).into();
-        theme.colors.group_box = rgb(0x0e1511).into();
-        theme.colors.switch = rgb(0x2f3e34).into();
+        theme.colors.background = rgb(0x000000).into();
+        theme.colors.foreground = rgb(0xf0f0f0).into();
+        theme.colors.border = rgb(0x2a2a2a).into();
+        theme.colors.muted = rgb(0x000000).into();
+        theme.colors.muted_foreground = rgb(0x8c8c8c).into();
+        theme.colors.primary = rgb(0x5fe08e).into();
+        theme.colors.primary_hover = rgb(0x78eca4).into();
+        theme.colors.primary_active = rgb(0x46c477).into();
+        theme.colors.primary_foreground = rgb(0x000000).into();
+        theme.colors.button_primary = rgb(0x000000).into();
+        theme.colors.button_primary_hover = rgb(0x101010).into();
+        theme.colors.button_primary_active = rgb(0x000000).into();
+        theme.colors.button_primary_foreground = rgb(0x5fe08e).into();
+        theme.colors.button = rgb(0x000000).into();
+        theme.colors.button_hover = rgb(0x000000).into();
+        theme.colors.button_active = rgb(0x000000).into();
+        theme.colors.secondary = rgb(0x000000).into();
+        theme.colors.secondary_hover = rgb(0x000000).into();
+        theme.colors.secondary_active = rgb(0x000000).into();
+        theme.colors.secondary_foreground = rgb(0xc4c4c4).into();
+        theme.colors.accent = rgb(0x000000).into();
+        theme.colors.accent_foreground = rgb(0x5fe08e).into();
+        theme.colors.ring = rgb(0x5fe08e).into();
+        theme.colors.sidebar = rgb(0x000000).into();
+        theme.colors.sidebar_foreground = rgb(0xc4c4c4).into();
+        theme.colors.sidebar_border = rgb(0x2a2a2a).into();
+        theme.colors.sidebar_accent = rgb(0x000000).into();
+        theme.colors.sidebar_accent_foreground = rgb(0x5fe08e).into();
+        theme.colors.sidebar_primary = rgb(0x5fe08e).into();
+        theme.colors.sidebar_primary_foreground = rgb(0x000000).into();
+        theme.colors.input = rgb(0x333333).into();
+        theme.colors.group_box = rgb(0x000000).into();
+        theme.colors.switch = rgb(0x2c2c2c).into();
+        theme.colors.selection = rgb(0x2a2a2a).into();
+        theme.colors.popover = rgb(0x000000).into();
+        theme.colors.popover_foreground = rgb(0xf0f0f0).into();
+        theme.colors.title_bar = rgb(0x000000).into();
+        theme.colors.title_bar_border = rgb(0x2a2a2a).into();
+        theme.colors.status_bar = rgb(0x000000).into();
+        theme.colors.status_bar_border = rgb(0x2a2a2a).into();
         theme.font_size = px(14.);
         theme.radius = px(8.);
         theme.radius_lg = px(12.);
@@ -74,43 +88,43 @@ pub fn install(cx: &mut App) {
 }
 
 pub fn page_bg() -> Hsla {
-    rgb(0x050706).into()
+    rgb(0x000000).into()
 }
 
 pub fn sidebar_bg() -> Hsla {
-    rgb(0x040605).into()
+    rgb(0x000000).into()
 }
 
 pub fn card_bg() -> Hsla {
-    rgb(0x0f1512).into()
+    rgb(0x000000).into()
 }
 
 pub fn ink() -> Hsla {
-    rgb(0xe6ede8).into()
+    rgb(0xf0f0f0).into()
 }
 
 pub fn ink_soft() -> Hsla {
-    rgb(0xb9c5bc).into()
+    rgb(0xc4c4c4).into()
 }
 
 pub fn muted_ink() -> Hsla {
-    rgb(0x8a978f).into()
+    rgb(0x8c8c8c).into()
 }
 
 pub fn faint_ink() -> Hsla {
-    rgb(0x5f6d64).into()
+    rgb(0x5c5c5c).into()
 }
 
 pub fn line() -> Hsla {
-    rgb(0x26332b).into()
+    rgb(0x2a2a2a).into()
 }
 
 pub fn line_soft() -> Hsla {
-    rgb(0x1a251f).into()
+    rgb(0x1a1a1a).into()
 }
 
 pub fn line_strong() -> Hsla {
-    rgb(0x3d5145).into()
+    rgb(0x414141).into()
 }
 
 pub fn accent() -> Hsla {
@@ -118,11 +132,13 @@ pub fn accent() -> Hsla {
 }
 
 pub fn accent_hover() -> Hsla {
-    rgb(0x78eca4).into()
+    rgb(0x7af0a4).into()
 }
 
+/// Secondary panels are outlined, never tinted. Keeping these helpers
+/// transparent lets callers opt into a border without painting a green wash.
 pub fn accent_soft() -> Hsla {
-    rgb(0x0f2a1b).into()
+    rgba(0x00000000).into()
 }
 
 pub fn success() -> Hsla {
@@ -130,7 +146,7 @@ pub fn success() -> Hsla {
 }
 
 pub fn success_soft() -> Hsla {
-    rgb(0x0d2418).into()
+    rgba(0x00000000).into()
 }
 
 pub fn warning() -> Hsla {
@@ -138,7 +154,7 @@ pub fn warning() -> Hsla {
 }
 
 pub fn warning_soft() -> Hsla {
-    rgb(0x2a2312).into()
+    rgba(0x00000000).into()
 }
 
 pub fn danger() -> Hsla {
@@ -146,15 +162,15 @@ pub fn danger() -> Hsla {
 }
 
 pub fn danger_soft() -> Hsla {
-    rgb(0x2a1513).into()
+    rgba(0x00000000).into()
 }
 
 pub fn overlay() -> Hsla {
-    rgba(0x020403e6).into()
+    rgba(0x000000e6).into()
 }
 
 pub fn hover_panel_bg() -> Hsla {
-    rgba(0x0c1611fa).into()
+    rgba(0x000000fa).into()
 }
 
 pub fn surface_color(surface: Surface) -> u32 {
@@ -167,15 +183,6 @@ pub fn surface_color(surface: Surface) -> u32 {
         Surface::PremiumArea => 0xd6b35f,
         Surface::Concentration => 0xb18cff,
     }
-}
-
-pub fn surface_rgb(surface: Surface) -> [u8; 3] {
-    let color = surface_color(surface);
-    [
-        ((color >> 16) & 0xff) as u8,
-        ((color >> 8) & 0xff) as u8,
-        (color & 0xff) as u8,
-    ]
 }
 
 pub fn surface_accent(surface: Surface) -> Hsla {

@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Icon, Selectable, Sizable, Size, StyledExt,
+    Icon, Selectable, Sizable, Size, StyledExt,
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
@@ -190,6 +190,8 @@ pub fn status_pill(
         .justify_center()
         .rounded_full()
         .bg(background)
+        .border_1()
+        .border_color(foreground.opacity(0.35))
         .text_color(foreground)
         .text_size(px(11.))
         .font_medium()
@@ -211,7 +213,9 @@ pub fn icon_box(icon: IconName, color: Hsla, size: f32) -> AnyElement {
         .size(px(size))
         .flex_shrink_0()
         .rounded(px(size * 0.28))
-        .bg(color.opacity(0.1))
+        .bg(theme::page_bg())
+        .border_1()
+        .border_color(color.opacity(0.32))
         .flex()
         .items_center()
         .justify_center()
@@ -219,25 +223,25 @@ pub fn icon_box(icon: IconName, color: Hsla, size: f32) -> AnyElement {
         .into_any_element()
 }
 
-pub fn segmented(buttons: Vec<Button>, cx: &App) -> AnyElement {
+pub fn segmented(buttons: Vec<Button>, _cx: &App) -> AnyElement {
     h_flex()
         .p_1()
         .gap_1()
         .rounded(px(9.))
-        .bg(cx.theme().colors.muted)
+        .bg(theme::page_bg())
         .border_1()
         .border_color(theme::line_soft())
         .children(buttons)
         .into_any_element()
 }
 
-pub fn segmented_wrap(buttons: Vec<Button>, cx: &App) -> AnyElement {
+pub fn segmented_wrap(buttons: Vec<Button>, _cx: &App) -> AnyElement {
     h_flex()
         .p_1()
         .gap_1()
         .flex_wrap()
         .rounded(px(9.))
-        .bg(cx.theme().colors.muted)
+        .bg(theme::page_bg())
         .border_1()
         .border_color(theme::line_soft())
         .children(buttons)
@@ -254,6 +258,12 @@ pub fn segment_button(
         .ghost()
         .label(label)
         .selected(selected)
+        .when(selected, |this| {
+            this.bg(theme::page_bg())
+                .border_1()
+                .border_color(theme::accent().opacity(0.8))
+                .text_color(theme::accent())
+        })
 }
 
 pub fn note(
@@ -269,6 +279,8 @@ pub fn note(
         .p_3()
         .rounded(px(10.))
         .bg(background)
+        .border_1()
+        .border_color(foreground.opacity(0.3))
         .text_color(foreground)
         .child(
             Icon::new(icon)
