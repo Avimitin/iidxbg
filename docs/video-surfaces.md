@@ -1,3 +1,12 @@
+# Current coverage (2026-10-23)
+
+Video playback now includes results, selection, SUDDEN+, LIFT, target graph,
+Premium Area and concentration. The latter two retain the exact 010-0917 guard.
+Bilibili live rooms use a bounded HLS/fMP4 transport feeding the same MF decoder.
+See [architecture](architecture.md#live-streaming-and-subscreen-media-2026-10-23)
+and [validation](validation.md) for current behavior and actual test coverage.
+The implementation/research chronology below describes earlier stages.
+
 # Implementation update (2026-10-23)
 
 The earlier research below is retained as historical analysis. A first runtime

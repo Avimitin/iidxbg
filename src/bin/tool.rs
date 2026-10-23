@@ -15,6 +15,59 @@ fn main() {
 fn run() -> iidxbg::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        #[cfg(windows)]
+        Some("live-check") if args.len() == 5 => {
+            use std::time::{Duration, Instant};
+            let room = iidxbg::bilibili::live::room_id(&args[2])?;
+            let out = Path::new(&args[3]);
+            let seconds = args[4]
+                .parse::<u64>()
+                .ok()
+                .filter(|n| (10..=300).contains(n))
+                .ok_or(iidxbg::Error::Config(
+                    "live-check duration must be 10..300 seconds",
+                ))?;
+            std::fs::create_dir_all(out)?;
+            let video = iidxbg::video::load_live(room, 432, 723)?;
+            pixels::write_preview(&video.first, &out.join("first.png"))?;
+            let mut report = Vec::new();
+            for visit in 0..2 {
+                let epoch = video.begin();
+                let start = Instant::now();
+                let duration = if visit == 0 { seconds } else { 10 };
+                let mut frames = 0;
+                let mut samples = 0;
+                while start.elapsed() < Duration::from_secs(duration) {
+                    if let Some(frame) = video.frame(epoch, start.elapsed()) {
+                        frames += 1;
+                        if start.elapsed().as_secs() >= samples * 5 {
+                            pixels::write_preview(
+                                &frame,
+                                &out.join(format!("visit-{visit}-{samples}.png")),
+                            )?;
+                            samples += 1;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                video.stop();
+                let error = video.take_error();
+                let row = serde_json::json!({"visit":visit,"seconds":duration,"frames":frames,"last_error":error});
+                println!("{row}");
+                report.push(row);
+                std::thread::sleep(Duration::from_secs(3));
+            }
+            drop(video);
+            std::fs::write(out.join("report.json"), serde_json::to_vec_pretty(&report)?)?;
+            if report
+                .iter()
+                .any(|r| r["frames"].as_u64().unwrap_or(0) < 30)
+            {
+                return Err(iidxbg::Error::Video(
+                    "insufficient live frames; see report".into(),
+                ));
+            }
+        }
         Some("bilibili-check") if args.len() == 4 => {
             use iidxbg::bilibili::{Api, Mode};
             let config = Config::load(Path::new(&args[2]))?.for_surface(Surface::Results);
@@ -98,7 +151,7 @@ fn run() -> iidxbg::Result<()> {
         }
         _ => {
             eprintln!(
-                "iidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>"
+                "iidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>\niidxbg-tool live-check <room-id> <output-directory> <seconds>"
             );
             std::process::exit(2);
         }

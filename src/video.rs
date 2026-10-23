@@ -14,6 +14,8 @@ use std::{
 #[cfg(windows)]
 mod mf;
 #[cfg(windows)]
+pub use mf::live::load_live;
+#[cfg(windows)]
 pub use mf::load;
 
 const CAPACITY: usize = 3;

@@ -30,9 +30,10 @@ pub(crate) enum SurfaceTextField {
     BiliVideo,
     BiliPlaylist,
     BiliFavourites,
+    BiliRoom,
 }
 impl SurfaceTextField {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::MediaPath,
         Self::LocalDirectory,
         Self::ApiUrl,
@@ -46,6 +47,7 @@ impl SurfaceTextField {
         Self::BiliVideo,
         Self::BiliPlaylist,
         Self::BiliFavourites,
+        Self::BiliRoom,
     ];
     fn key(self) -> &'static str {
         match self {
@@ -62,12 +64,13 @@ impl SurfaceTextField {
             Self::BiliVideo => "video",
             Self::BiliPlaylist => "playlist",
             Self::BiliFavourites => "favourites",
+            Self::BiliRoom => "room",
         }
     }
     fn path(self, surface: Surface) -> Vec<&'static str> {
         match self {
             Self::FrameCharaImage => vec!["selection", self.key()],
-            Self::BiliVideo | Self::BiliPlaylist | Self::BiliFavourites => {
+            Self::BiliVideo | Self::BiliPlaylist | Self::BiliFavourites | Self::BiliRoom => {
                 vec!["sources", surface.name(), "bilibili", self.key()]
             }
             Self::MediaPath | Self::LocalDirectory => vec!["sources", surface.name(), self.key()],
@@ -90,6 +93,7 @@ impl SurfaceTextField {
             Self::BiliVideo => c.bilibili.selection.video,
             Self::BiliPlaylist => c.bilibili.selection.playlist,
             Self::BiliFavourites => c.bilibili.selection.favourites,
+            Self::BiliRoom => c.bilibili.selection.room,
         }
     }
 }
@@ -389,6 +393,7 @@ pub(crate) fn render_editor(
                 (Mode::Recommendations, "随机推荐"),
                 (Mode::Playlist, "合集 / 系列"),
                 (Mode::Favourites, "收藏夹"),
+                (Mode::Live, "直播间"),
             ] {
                 modes = modes.child(
                     widgets::segment_button(
@@ -409,6 +414,15 @@ pub(crate) fn render_editor(
             }
             body = body.child(modes);
             match c.bilibili.selection.mode {
+                Mode::Live => {
+                    body = body.child(field_row(
+                        editor,
+                        SurfaceTextField::BiliRoom,
+                        "直播间链接 / ID",
+                        false,
+                        cx,
+                    ));
+                }
                 Mode::Video => {
                     body = body.child(field_row(
                         editor,
@@ -476,7 +490,11 @@ pub(crate) fn render_editor(
                 div()
                     .text_xs()
                     .text_color(theme::muted_ink())
-                    .child("先缓存 H.264 视频再播放。登录和收藏夹刷新请前往侧栏 Bilibili 页面。"),
+                    .child(if c.bilibili.selection.mode == Mode::Live {
+                        "直播使用短分片缓冲，不保存整场直播；未开播时保留原画面，播放中断后自动重连。无音频。"
+                    } else {
+                        "先缓存 H.264 视频再播放。登录和收藏夹刷新请前往侧栏 Bilibili 页面。"
+                    }),
             );
         }
         if c.source == Source::File {
@@ -628,14 +646,6 @@ pub(crate) fn render_editor(
             );
         }
         body = body.child(fit);
-    }
-    if matches!(surface, Surface::PremiumArea | Surface::Concentration) {
-        body = body.child(
-            div()
-                .text_xs()
-                .text_color(theme::muted_ink())
-                .child("这两个组件目前使用静态图片；选择视频时只显示首帧。"),
-        );
     }
     if surface == Surface::SongSelect {
         body = body

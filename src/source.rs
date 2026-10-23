@@ -42,6 +42,7 @@ pub struct Provider {
     /// unchanged, so repeated scene requests do not rescan the same folder.
     scan: Option<ScanCache>,
     media_cache: Option<(PathBuf, SystemTime, u64, Asset)>,
+    live_cache: Option<(u64, Asset)>,
 }
 
 struct ScanCache {
@@ -148,6 +149,7 @@ impl Provider {
             previous: None,
             scan: None,
             media_cache: None,
+            live_cache: None,
         })
     }
 
@@ -173,6 +175,28 @@ impl Provider {
     }
 
     pub fn prepare_media(&mut self) -> Result<Asset> {
+        if self.config.source == Source::Bilibili
+            && self.config.bilibili.selection.mode == crate::bilibili::Mode::Live
+        {
+            let room = crate::bilibili::live::room_id(&self.config.bilibili.selection.room)?;
+            if let Some((cached, asset)) = &self.live_cache
+                && *cached == room
+            {
+                return Ok(asset.clone());
+            }
+            #[cfg(windows)]
+            {
+                let asset = Asset::Video(crate::video::load_live(
+                    room,
+                    self.config.image.width,
+                    self.config.image.height,
+                )?);
+                self.live_cache = Some((room, asset.clone()));
+                return Ok(asset);
+            }
+            #[cfg(not(windows))]
+            return Err(Error::Video("live playback requires Windows".into()));
+        }
         let result = match self.config.source {
             Source::Bilibili => {
                 let path = crate::bilibili::Api::saved()?

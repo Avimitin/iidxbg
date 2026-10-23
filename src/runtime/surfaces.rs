@@ -9,8 +9,8 @@ pub(super) struct Bundle {
     upper: Option<Asset>,
     lower: Option<Asset>,
     graph: Option<Asset>,
-    premium_area: Option<Arc<Prepared>>,
-    concentration: Option<Arc<Prepared>>,
+    premium_area: Option<Asset>,
+    concentration: Option<Asset>,
 }
 
 static LATEST: Mutex<Option<Arc<Bundle>>> = Mutex::new(None);
@@ -31,12 +31,8 @@ pub(super) fn publish(images: &[Option<Asset>; Surface::COUNT]) {
         upper: images[Surface::SuddenPlus.index()].clone(),
         lower: images[Surface::Lift.index()].clone(),
         graph: images[Surface::TargetGraph.index()].clone(),
-        premium_area: images[Surface::PremiumArea.index()]
-            .as_ref()
-            .map(Asset::first),
-        concentration: images[Surface::Concentration.index()]
-            .as_ref()
-            .map(Asset::first),
+        premium_area: images[Surface::PremiumArea.index()].clone(),
+        concentration: images[Surface::Concentration.index()].clone(),
     }));
 }
 
@@ -669,14 +665,15 @@ impl PremiumArea {
     }
 
     unsafe fn refresh(&mut self, n: &Native, bundle: Option<Arc<Bundle>>, enabled: bool) {
-        let image = bundle
+        let asset = bundle
             .as_ref()
             .and_then(|b| b.premium_area.clone())
             .filter(|_| enabled);
-        let Some(image) = image else {
+        let Some(asset) = asset else {
             unsafe { self.restore(n) };
             return;
         };
+        let image = asset.first();
         if self.object == 0 {
             return;
         }
@@ -685,19 +682,9 @@ impl PremiumArea {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, &image));
         if current && self.sprite.as_ref().is_some_and(|sprite| sprite.node != 0) {
-            return;
-        }
-        // Reuse the live sprite when only the pixels changed: refresh the D3D
-        // texture in place instead of rebuilding the AFP node.
-        if let Some(sprite) = &mut self.sprite
-            && sprite.node != 0
-            && let Some(texture) = &mut sprite.texture
-            && texture.width == image.width
-            && texture.height == image.height
-            && unsafe { texture.write_pixels(&image) }.is_ok()
-        {
-            self.image = Some(image);
-            event(Event::Surface("premium area"));
+            if !unsafe { self.sprite.as_ref().unwrap().update() } {
+                unsafe { self.restore(n) };
+            }
             return;
         }
         let target = if self.custom != 0 {
@@ -732,7 +719,15 @@ impl PremiumArea {
             }
             return;
         };
-        match unsafe { Sprite::create(n, &image, self.priority) } {
+        match unsafe {
+            Sprite::media(
+                n,
+                &asset,
+                self.priority,
+                asset.width as f32,
+                asset.height as f32,
+            )
+        } {
             Ok(sprite) => {
                 unsafe { apply_transform(n, sprite.node, &transform) };
                 // Both native nodes occupy the same 1280x720 priority-58 area.
@@ -800,15 +795,18 @@ impl PremiumArea {
 /// setter the game itself uses for its customization backgrounds.
 struct BoundClip {
     clip: usize,
+    node: u32,
+    hidden: Option<u8>,
     /// Kept alive so the AFP node never references unregistered art.
-    texture: Texture,
+    texture: Arc<Texture>,
+    media: Option<Arc<GpuMedia>>,
     archive: usize,
     name: [u8; 256],
     restorable: bool,
 }
 
 impl BoundClip {
-    unsafe fn bind(n: &Native, clip: usize, image: &Prepared) -> Result<Self> {
+    unsafe fn bind(n: &Native, clip: usize, asset: &Asset) -> Result<Self> {
         // A CMovieClip stores its 256-byte name at +0, the AFP node id at +512
         // and the archive pointer at +520. Only a complete archive/name pair can
         // be rebound by the native archive setter.
@@ -825,7 +823,8 @@ impl BoundClip {
             // texture bind would silently do nothing.
             return Err(Error::Native("concentration clip has no AFP node"));
         }
-        let texture = unsafe { Texture::upload(n, image) }?;
+        let media = unsafe { GpuMedia::acquire(n, asset) }?;
+        let texture = media.texture.clone();
         let set: SetTexture = unsafe { n.function("set_texture") };
         if unsafe { set(clip, texture.descriptor()) } == 0 {
             return Err(Error::Native("concentration texture bind"));
@@ -836,7 +835,10 @@ impl BoundClip {
         )));
         Ok(Self {
             clip,
+            node,
+            hidden: None,
             texture,
+            media: Some(media),
             archive,
             name,
             restorable,
@@ -849,6 +851,18 @@ impl BoundClip {
         }
         let set: SetArchive = unsafe { n.function("set_archive") };
         unsafe { set(self.clip, self.archive, self.name.as_ptr().cast()) };
+    }
+
+    unsafe fn hide_unrestorable(&mut self, n: &Native) {
+        // A dynamic texture on the default layer root survives the native hide
+        // animation. Explicitly mask that retained descriptor until next show.
+        if self.hidden.is_none()
+            && unsafe { ((self.clip + 512) as *const u32).read() } == self.node
+            && let Some(visible) = unsafe { clip_visible(n, self.node) }
+            && unsafe { set_clip_visible(n, self.node, 0) }
+        {
+            self.hidden = Some(visible);
+        }
     }
 }
 
@@ -866,7 +880,7 @@ struct Concentration {
     fallback: [bool; 2],
     names: [u8; 2],
     visible: bool,
-    image: Option<Arc<Prepared>>,
+    image: Option<Asset>,
     bound_image: Option<Arc<Prepared>>,
     bound: Vec<BoundClip>,
 }
@@ -1005,45 +1019,45 @@ impl Concentration {
     }
 
     unsafe fn refresh(&mut self, n: &Native, enabled: bool) {
-        let image = self.image.clone().filter(|_| enabled && self.visible);
-        let Some(image) = image else {
+        let asset = self.image.clone().filter(|_| enabled && self.visible);
+        let Some(asset) = asset else {
             unsafe { self.release(n) };
             return;
         };
         if self.clips.iter().all(|clip| *clip == 0) {
             return;
         }
+        let image = asset.first();
         let current = self
             .bound_image
             .as_ref()
             .is_some_and(|bound| Arc::ptr_eq(bound, &image));
         if current && !self.bound.is_empty() {
+            if self.bound.iter().any(|bound| {
+                bound
+                    .media
+                    .as_ref()
+                    .is_some_and(|media| unsafe { media.update() }.is_err())
+            }) {
+                unsafe { self.release(n) };
+            }
             return;
-        }
-        // New image on the same bound clips: refresh the D3D textures in place
-        // and keep the existing AFP binding.
-        if !self.bound.is_empty()
-            && self.bound.iter().all(|bound| {
-                bound.texture.width == image.width && bound.texture.height == image.height
-            })
-        {
-            let mut ok = true;
-            for bound in &mut self.bound {
-                if unsafe { bound.texture.refresh(n, &image) }.is_err() {
-                    ok = false;
-                    break;
-                }
-            }
-            if ok {
-                self.bound_image = Some(image);
-                event(Event::Surface("concentration background"));
-                return;
-            }
         }
         let mut previous = std::mem::take(&mut self.bound);
         for clip in self.clips.iter().copied().filter(|clip| *clip != 0) {
-            match unsafe { BoundClip::bind(n, clip, &image) } {
-                Ok(bound) => {
+            match unsafe { BoundClip::bind(n, clip, &asset) } {
+                Ok(mut bound) => {
+                    // Keep the original native binding across source changes.
+                    if let Some(old) = previous.iter().find(|old| old.clip == clip) {
+                        bound.archive = old.archive;
+                        bound.name = old.name;
+                        bound.restorable = old.restorable;
+                        if old.node == bound.node
+                            && let Some(visible) = old.hidden
+                        {
+                            unsafe { set_clip_visible(n, bound.node, visible) };
+                        }
+                    }
                     // The node now points at the new texture; the old wrapper for
                     // this clip can be dropped safely.
                     previous.retain(|old| old.clip != clip);
@@ -1080,11 +1094,14 @@ impl Concentration {
         // that information keeps our wrapper alive so the AFP node never points
         // at unregistered art; it is invisible while the window is hidden.
         let mut keep = Vec::new();
-        for bound in self.bound.drain(..) {
+        for mut bound in self.bound.drain(..) {
             if bound.restorable {
                 unsafe { bound.restore(n) };
                 // Dropping now unregisters our texture after the native rebind.
             } else {
+                // Keep the descriptor alive, but stop hidden playback/IO.
+                bound.media = None;
+                unsafe { bound.hide_unrestorable(n) };
                 keep.push(bound);
             }
         }
@@ -1309,6 +1326,10 @@ pub(super) fn tick_premium() {
         }
         let Some(n) = NATIVE.get() else { return };
         let Some(mut s) = state() else { return };
+        unsafe {
+            s.concentration
+                .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
+        };
         if s.premium_area.object != 0 {
             unsafe {
                 s.premium_area
@@ -1555,6 +1576,10 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
         }
         let Some(mut s) = state() else { return };
         let n = NATIVE.get().unwrap();
+        unsafe {
+            s.concentration
+                .refresh(n, CONCENTRATION_ENABLED.load(Ordering::Acquire))
+        };
         // The native sprite pool retires our premium sprite at scene changes
         // while the native nodes are session-global. Recreate it here so the
         // premium background also survives loading and gameplay.

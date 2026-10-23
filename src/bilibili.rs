@@ -1,6 +1,7 @@
 //! Bilibili web API adapter. All calls belong to provider/UI workers, never hooks.
 //! Only complete, bounded H.264 files enter the existing Media Foundation player.
 pub mod auth;
+pub mod live;
 use crate::{Error, Result};
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,7 @@ pub enum Mode {
     Recommendations,
     Playlist,
     Favourites,
+    Live,
 }
 impl Mode {
     pub fn key(self) -> &'static str {
@@ -29,6 +31,7 @@ impl Mode {
             Self::Recommendations => "recommendations",
             Self::Playlist => "playlist",
             Self::Favourites => "favourites",
+            Self::Live => "live",
         }
     }
 }
@@ -39,6 +42,7 @@ pub struct Selection {
     pub video: String,
     pub playlist: String,
     pub favourites: String,
+    pub room: String,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -74,6 +78,7 @@ impl Settings {
                 &self.selection.video,
                 &self.selection.playlist,
                 &self.selection.favourites,
+                &self.selection.room,
             ]
             .iter()
             .any(|s| s.len() > 2048)
@@ -115,7 +120,10 @@ impl Api {
         path: &str,
         params: &[(&str, String)],
     ) -> Result<reqwest::blocking::Response> {
-        assert!(matches!(host, "api.bilibili.com" | "passport.bilibili.com"));
+        assert!(matches!(
+            host,
+            "api.bilibili.com" | "passport.bilibili.com" | "api.live.bilibili.com"
+        ));
         let mut request = self
             .client
             .get(format!("https://{host}{path}"))
@@ -209,6 +217,7 @@ impl Api {
     fn candidates(&self, selection: &Selection) -> Result<Vec<VideoRef>> {
         match selection.mode {
             Mode::Video => Ok(vec![VideoRef::parse(&selection.video)?]),
+            Mode::Live => Err(err("直播请使用流媒体播放器")),
             Mode::Recommendations => {
                 self.account()?;
                 let data = self.signed(

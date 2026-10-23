@@ -1,3 +1,9 @@
+> 2026-10-23 update: all listed surfaces now accept video/live media. Premium
+> uses the shared media sprite and concentration updates its bound texture from
+> the same graphics-owner callbacks. See the latest [validation](validation.md)
+> and [exact-build evidence](iidx34-010-0917-analysis.md#subscreen-video-and-live-streams-2026-10-23).
+> The original implementation notes below describe the image-only stage.
+
 # Additional background surfaces
 
 Implemented in **0.2.1**, for the exact IIDX 33 and 34 fingerprints in the

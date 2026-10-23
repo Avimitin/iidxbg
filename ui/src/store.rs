@@ -489,6 +489,7 @@ mod tests {
                 "https://space.bilibili.com/123/lists/456?type=season",
             );
             set_string(doc, &["sources", "lift", "bilibili", "favourites"], "789");
+            set_string(doc, &["sources", "lift", "bilibili", "room"], "24065");
             set_string(doc, &["sources", "sudden_plus", "bind"], "lift");
         }));
         for mode in [
@@ -496,6 +497,7 @@ mod tests {
             Mode::Recommendations,
             Mode::Playlist,
             Mode::Favourites,
+            Mode::Live,
         ] {
             assert!(store.edit(|doc| set_string(
                 doc,
@@ -511,6 +513,7 @@ mod tests {
             assert_eq!(selected.mode, mode);
             assert_eq!(selected.video, "BV1Pqi4BzEkP");
             assert_eq!(selected.favourites, "789");
+            assert_eq!(selected.room, "24065");
         }
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();

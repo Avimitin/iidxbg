@@ -178,8 +178,9 @@ GPU cache maps that asset identity to one `GpuMedia` texture and descriptor. Bou
 SUDDEN+/LIFT/graph sprites have separate native geometry but share uploads. Each
 frame is uploaded only when its Arc changes. Reset releases the sprites before
 the shared texture and rebuilds from the frozen choice. Results use the same CPU
-session in their existing illustration adapter. Premium/concentration currently
-consume the first frame as a static image; the UI states this limitation.
+session in their existing illustration adapter. Premium uses the same media sprite;
+concentration keeps its native clip binding and shares `GpuMedia` leases. Both
+update from existing graphics-owner callbacks, retaining their native placement.
 
 The exact 010-0917 selection adapter masks the verified frame_layer2 root only
 while a replacement AFP sprite is valid. Native visibility is restored before
@@ -226,3 +227,36 @@ Protocol references inspected: PiliPlus `lib/http/video.dart`, `lib/http/fav.dar
 `lib/utils/wbi_sign.dart`, and wiliwili's QR-login flow. The Rust adapter is an
 independent implementation of these HTTP protocols. Current QR generation was
 verified live to return `account.bilibili.com/h5/account-h5/auth/scan-web`.
+
+
+## Live streaming and subscreen media (2026-10-23)
+
+`Selection::Live` takes a room ID or HTTPS live.bilibili.com link. A provider owns
+one prepared live asset per room/canvas and reuses it across visits, including
+transient failures. Binding consumers share that asset; independent providers do
+not accidentally share their clocks. No new native hooks, RVAs or build guards.
+
+The transport requests read-only `getRoomPlayInfo` HLS/fMP4/AVC at qn250. CDN
+traffic uses a separate no-cookie HTTPS client and validates every redirect and
+playlist/init/fragment URL against the existing bilivideo host policy. It reads
+at most 256 KiB playlists, 2 MiB initialization data and 16 MiB per complete GOP.
+Bilibili keyframe markers delimit independently decodable groups. Encryption and
+byte-range playlists are rejected. Signed URLs never enter logs or TOML.
+
+A below-normal network worker fetches complete groups into closed temporary MP4
+files. A separate MTA MF worker opens them sequentially without looping. A
+bounded channel holds two groups, plus one pending/in-progress download and one
+active decoder file. TempPath deletes each after Reader closes. Crash leftovers
+are possible; there is no archive/download history for live playback. Decoder
+output uses the existing three-frame owned BGRA mailbox; graphics callbacks
+only poll/upload ready pixels. Stream timestamps are normalized across chunks;
+discontinuities and large jumps rebase the timeline. Active transport errors
+retry after three seconds, retaining the last frame. An initial preparation
+failure follows the provider's existing deferred retry and stock fallback.
+
+Last-lease release stops reads and drains queued files (an in-flight bounded
+HTTP request can finish first). Next activation requests a fresh URL and current
+live group. Premium is session-global and therefore stays active across scenes;
+concentration releases playback on native hide, while retaining a descriptor
+for any native clip without a restorable archive/name pair. Original archive
+bindings survive subsequent media changes. GPU ownership/reset stays unchanged.

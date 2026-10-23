@@ -1156,3 +1156,100 @@ black at small SUDDEN+ heights. Enlarging the cover verifies playback but does
 not fix the fitting defect. Cover fitting for video remains unresolved; these
 captures must not be interpreted as validation of a fully filled cover at all
 heights. No DP/P2, high-grade result or device-loss coverage was added.
+
+
+## Bilibili live streaming and subscreen playback (2026-10-23)
+
+Before implementation, committed the VOD provider/account UI as `90ade7e`;
+the personal root TOML was excluded. Live changes are included in the v0.4.0 release preparation.
+Game input remained SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`.
+No game DLL/assets were written. Spice restart inherited the running launcher's
+elevation; the existing monitor bypass changed process memory only.
+
+Offline checks passed: 47 native tests (three fixture/network tests ignored),
+13 UI tests, both clippy runs with warnings denied, formatting and release builds.
+Exact-build native/surface verifiers passed all 39 guards. Private-process
+attachment passed native, preserved-chain and modified-tail rejection modes
+across the test builds. Final deployed plugin SHA-256:
+`d0060d000ffb12dc8050a70370ab3972109aa05378d83836f4fb6c090cf291e0`.
+Deployed configuration app SHA-256:
+`4dbdceb68aa8435297efe6a0dfe2a52b21b33e9c135c6caffcd15eb29fde2782`.
+
+The read-only room API returned HLS/fMP4/AVC for rooms 24065 and 6. A closed
+initialization-plus-GOP fixture from 24065 (SHA-256
+`5437cb7f9fbcc762b8991106ccb01dd5591d47bcc20f3847d749ed0ddb89a895`)
+decoded with Windows Media Foundation, without FFmpeg. `iidxbg-tool live-check`
+delivered 1001 frames over 30 seconds, then 317 over a second 10-second visit
+for room 24065; room 6 delivered 416/15 seconds and 257/10 seconds. Both reports
+had null last_error. Local temporary live files returned to zero after the
+stop/drop checks; two files were observed while running. These checks establish
+stop/resume and real MF decode, not a network-outage stress test.
+
+**Actual in-game testing was performed**, on guest Standard SP Caramel Pain
+BEGINNER 1, using different rooms per module:
+
+| Surface | Assignment and observation |
+| --- | --- |
+| Results | Room 24065; failed/F result background visibly advanced behind score UI |
+| Selection | Room 6; live broadcast advanced behind the native selection UI |
+| SUDDEN+ / LIFT | Room 24065, SUDDEN+ bound to LIFT; both sprites shared descriptor `0xd7962928`; enlarged SUDDEN+ visibly advanced |
+| Target graph | Independent room 6; live broadcast advanced behind bars and labels |
+| Premium Area | Independent room 24065, 1280x720, base-only native path; moving video behind subscreen controls during selection/gameplay/results |
+| Concentration | Independent room 6, default index 0; full-subscreen moving video, repeated native hide/show and return to Premium confirmed after fix |
+
+The first test build (`8f220891b06c62afea87bde48ee01a721ed2f478aa9a6bb6b3ff3075b63ecefb`)
+exposed an old concentration cleanup problem: its unrestorable default root
+texture remained visible after native show(0), displaying the last decoded
+frame on results. The final build explicitly masks retained native nodes on
+hide and restores the saved visibility on the next bind only for the same AFP
+node identity. Repeated shows reused the clip pool (109 entries in the final
+run). Tapping the concentration screen returned to Premium/assistant UI,
+automatic re-show resumed moving room 6 frames, switching concentration off
+returned Premium, and the result subscreen continued moving with room 24065.
+No runtime native/upload failure was reported in the final run. One room-6
+playlist preparation failed in the first run; the existing deferred retry
+successfully prepared it before selection. No unsupported-stream bypass added.
+
+Reproduction: PgUp opens Spice's subscreen overlay through Moonlight. Spice
+capture index 1 is the 1280x720 subscreen; API touch coordinates use that canvas.
+During gameplay, open the top-left assistant and tap CONCENTRATION MODE near
+(100,196); tap the screen to dismiss temporarily, or switch the option off.
+For visible SUDDEN+ content, hold Start and TT+ to increase SUB-LENGTH to about
+621. Small cover heights can expose only black aspect-ratio margins, accepted
+by the user; no video-fit change was made.
+
+Local evidence remains ignored under `target/verification-20261023/`:
+`live-selection-a/b.jpg`, `live-premium-select-a/b.jpg`, `live-playing-a/b.jpg`,
+`live-result-a/b.jpg`, `live-fix-active-a/b.jpg`, `live-fix-reshow-a/b.jpg`,
+`live-fix-tap.jpg`, `live-fix-disabled.jpg`, `live-fix-result-sub-a/b.jpg`,
+`live-first-pass.log` and `live-verified.log`. Decoder reports are under
+`target/live-check-24065/` and `target/live-check-6/`.
+Temporary per-module test settings were restored byte-for-byte from
+`target/live-game-original.toml`; the new DLL and UI remain deployed.
+
+Limits: no live A/AA/AAA result visit, DP/player-2, customized concentration
+index, other game hash, induced device loss, long network outage, or frame-time
+tail benchmark. LIFT's short visible crop was black; its shared native descriptor
+and SUDDEN+ motion establish the shared player, not visible content at every
+cover height. HLS has seconds of latency, is silent, and is limited to the
+available AVC/fMP4 rendition. Temporary files are bounded and normally deleted;
+a process crash may leave files for the operating system/user to clean up.
+
+
+## Version 0.4.0 release preparation (2026-10-23)
+
+Includes Bilibili fixed videos, recommendations, collections/series, favourites,
+QR account login, per-module live rooms, and moving media on Premium Area and
+concentration. The native concentration hide/show fix and actual in-game scope
+are recorded above. Version metadata and both lockfiles advance to 0.4.0.
+Personal root TOML edits are excluded from the commit; the tag workflow packages
+repository defaults. IIDX34 was stopped through Spice control_exit at the user's
+request, and its API endpoint was verified offline. IIDX33 was untouched.
+
+Release-version builds, DLL smoke loading and exact-build private attachment
+passed. Local ZIP was checked byte-for-byte and uses the committed default TOML.
+
+- v0.4.0 iidxbg.dll SHA-256: `53a9985452166aded8cf2aecaa4387833e164fb60447a4e20fe5ad9d45309a08`.
+
+- v0.4.0 iidxbg-config.exe SHA-256: `8bcca1f53aaaf1f0dc756b3e8c883891b9563baf4717cc75d748bdeb724015b9`.

@@ -77,7 +77,7 @@
 
 最新版本：[GitHub Releases](https://github.com/Avimitin/iidxbg/releases)
 
-当前已发布版本：**0.3.0**。Bilibili 功能在当前开发版中。
+当前版本：**0.4.0**。支持 Bilibili 点播来源、扫码登录与直播间播放。
 
 ## Bilibili 来源
 
@@ -94,14 +94,15 @@
 | 随机推荐 | 使用已登录账号的网页推荐流；随机选一个可播放的视频 |
 | 合集 / 系列 | UP 主空间的合集/系列链接，例如 `https://space.bilibili.com/123/lists/456?type=season`；随机选视频 |
 | 收藏夹 | 收藏夹链接（含 `fid`）或文件夹 ID，也可直接选择账号页加载的收藏夹；随机选视频 |
+| 直播间 | `https://live.bilibili.com/24065` 或数字房间 ID；每个组件可独立选择 |
 
 收藏夹内容可在手机 App 中维护，插件在下一次准备时重新读取。短链接 `b23.tv` 暂不支持，
 请使用展开后的完整链接。不可访问、删除、超出时长或没有 H.264 版本的视频会跳过；准备失败
 保留先前媒体，首次尚无媒体则使用游戏原图。推荐结果可能与手机客户端不同。
 
-视频会先完整缓存，再交给现有 Windows Media Foundation 解码器；不是边下载边播放。
+点播视频会先完整缓存，再交给现有 Windows Media Foundation 解码器；不是边下载边播放。
 播放静音循环，不发送观看进度、点赞或收藏操作。每次结算固定一个视频；SUDDEN+/LIFT/目标图
-仍可绑定并共享解码器及纹理。Premium/集中模式仍仅显示第一帧。
+仍可绑定并共享解码器及纹理。Premium/集中模式也支持视频和直播。
 
 可选 TOML 设置（省略时使用这些默认值）：
 
@@ -117,7 +118,7 @@ max_duration_seconds = 600
 [sources.results]
 source = "bilibili"
 [sources.results.bilibili]
-mode = "favourites"          # video / recommendations / playlist / favourites
+mode = "favourites"          # video / recommendations / playlist / favourites / live
 favourites = "123456"
 ```
 
@@ -127,3 +128,11 @@ favourites = "123456"
 ## License
 
 MIT
+
+直播使用 Bilibili H.264 fMP4/HLS 流，静音播放，不需要 FFmpeg。每个组件可设置
+`mode = "live"` 和 `room = "24065"`，也可绑定兼容组件以共享网络、解码和纹理。
+直播不写入点播缓存：只在 Windows 临时目录保留短分片，读完即删；通常有数秒延迟。
+每路最多四份 16 MiB 分片（解码中、队列两份、准备中一份），另有初始化数据和三帧像素队列。
+隐藏的组件在最后一个播放租约释放后停止取流，再次显示从直播当前进度开始。
+断网时保留最后一帧并重试；首次未开播或没有兼容流时保留原背景。
+`[bilibili]` 的下载大小、时长和缓存额度用于点播，不控制直播短缓冲。

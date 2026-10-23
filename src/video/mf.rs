@@ -1,5 +1,6 @@
 //! Windows Media Foundation objects live and die on this thread (MTA).
 use super::*;
+pub mod live;
 use crate::{Error, Result};
 use std::{path::Path, sync::mpsc};
 use windows::{

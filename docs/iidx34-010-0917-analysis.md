@@ -392,3 +392,45 @@ no GPU loss induced under simultaneous playback, and no 1080p60 frame-time-tail
 benchmark. The new selection mask is embedded only in this exact build. The
 user previously confirmed static high-grade results; new high-grade video needs
 an actual A/AA/AAA visit to establish live coverage separately from failed/F.
+
+
+## Subscreen video and live streams (2026-10-23)
+
+Input remains the exact SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`.
+No native entry, ABI, guard or RVA changed. Premium constructor `0x6447a0`
+observed a nonzero base and null custom sprite (previously unconfirmed base-only
+path), priority 58. Its 1280x720 media sprite copies the same AFP transform.
+`movie_draw` at `0x9362b0` and the existing results tick update owned GPU pixels.
+Worker IO/decoding never runs inside these callbacks.
+
+Concentration apply/show/layer remain `0x6375c0` / `0x6377f0` / `0x638420` with
+the ABIs recorded above. On native show, customize index 0 resolved element0 to
+its root clip (fallback, no name) and element1 to `concentration_bg_set/bg`.
+Both reported a live AFP node, visibility 1, and no restorable archive/name.
+Binding still uses `set_texture` at `0x329e50`; the original archive setter at
+`0x329f30` remains the restoration path where a complete binding exists.
+Each bound clip now retains an Arc texture and shared playback lease; only
+ready owned frames update the dynamic texture. Hiding releases the playback
+lease while keeping an unrestorable descriptor alive for the native pointer.
+
+The first live transition exposed a pre-existing visibility hole: native
+show(0) left a dynamic texture bound to the default root visible over results.
+The decoder correctly stopped, so the stale frame persisted. Unrestorable
+bindings now explicitly mask AFP visibility (4103, then dirty 4126), saving its
+old value once. Rebinding on the next show restores the saved value only if
+the clip still contains the same AFP node ID at +512. This avoids applying a
+saved visibility to a recycled node. Archive/name restoration data is retained
+across source changes rather than replaced by our own dynamic binding.
+
+Reproduce on guest Standard SP: use live room 24065 for Premium and room 6 for
+concentration; enter selection, PgUp to open the Spice subscreen, and compare
+Spice capture screen 1 over time. During gameplay tap the top-left assistant
+icon, then the CONCENTRATION MODE switch (about 100,196 on the 1280x720
+subscreen). Wait for the native transition, compare frames, and let the song
+retire. Confirm concentration is hidden and Premium returns on results; repeat
+the show/hide cycle. Evidence and exact tested plugin hashes are in validation.md.
+
+Unknowns: customized (nonzero-index) concentration window, alternative native
+layouts, device loss during these streams, and other game hashes remain outside
+this live test. Public live room content and availability can change.
