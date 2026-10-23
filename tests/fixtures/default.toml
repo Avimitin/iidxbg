@@ -1,0 +1,215 @@
+# iidxbg — save this UTF-8 file beside iidxbg.dll.
+# Scene events request config reload and image preparation; no restart needed.
+# Invalid edits keep the last valid settings. An in-flight query and the image
+# already displayed remain unchanged; edits apply to the next query/visit.
+# No periodic config/image-file watcher. Retry/deferred requests also reload.
+# Relative paths start from this file's folder. Use single quotes for Windows
+# paths, for example 'D:\Pictures\IIDX', so backslashes need no escaping.
+
+# Legacy master switch/defaults kept for existing files. The UI has no global
+# page: edit each surface independently below. Keep this true for normal use.
+enabled = true
+
+# Legacy result-only video setting. Prefer source = "file" and media_path in
+# [sources.results]. Existing installations still accept this older key.
+results_video = ''
+
+# "file": one PNG/JPEG or local video from media_path.
+# "local": random image/video from local_directory.
+# "remote": download an image from the configured Moebooru-compatible API.
+# "mixed": randomly choose a source; try the other source if it fails.
+source = "local"
+
+# PNG/JPEG folder. Rescanned for each preparation; new images need no restart.
+local_directory = 'iidxbg'
+
+# Search subfolders too (up to 8 levels / 10,000 candidates).
+# Symlinks and junctions are skipped.
+recursive = false
+
+[moebooru]
+# Moebooru API settings. The domain selects a supported endpoint and download hosts.
+# This is not auto-detection of arbitrary image-site APIs.
+# API domain candidates (use the domain name without https://):
+#   "konachan.net" - default; also used when this setting is omitted.
+#   "konachan.com" - alternative Konachan API.
+#   "yande.re" - Yande.re API.
+domain = "konachan.net"
+
+# Space-separated search tags. Example: "rating:safe landscape".
+tags = "rating:safe"
+
+# Save successfully decoded downloads here. Optional max_images prunes this folder.
+# To randomly reuse downloads offline, also set local_directory to this folder.
+save_directory = 'iidxbg/downloads'
+
+# Choose a random API page from 1 through this number, then shuffle its posts.
+# Range: 1–100. An empty page falls back to page 1.
+page_max = 5
+
+# Timeout for each HTTP request, in seconds. Range: 3–60.
+# Failed preparation retries after 60 seconds.
+timeout_seconds = 20
+
+# Maximum number of managed PNG/JPEG downloads in save_directory; 0 = unlimited.
+# Before/after each enabled surface query, delete the oldest excess files by
+# modification time. Only konachan/yandere-post-id-hash filenames are counted.
+# Local artwork, unrelated files, subfolders, symlinks and junctions are excluded.
+# Shared save folders share this count; use the same limit or separate folders.
+# Range: 0-1,000,000. Cleanup errors are logged and do not discard prepared images.
+max_images = 0
+
+[image]
+# Output texture canvas. Width: 64–3840; height: 64–2160.
+# Keep these defaults for the initial in-game crop/placement test.
+width = 1920
+height = 1080
+
+# "cover": keep aspect ratio, fill canvas, and center-crop excess edges.
+# "contain": sharp centered image over a heavily blurred, stretched copy.
+# The blur fills unused space; it never blurs the main image.
+fit = "contain"
+
+# Maximum encoded file size for BOTH local files and downloads, in MiB (1–64).
+max_download_mb = 24
+
+# Maximum decoded source width × height, before resize (1–64,000,000 pixels).
+max_source_pixels = 40000000
+
+[selection]
+# true preserves native frame-character visibility; false hides its artwork.
+# Reloaded on selection/result entry or exit and gameplay owner retirement.
+# Independent of custom background switches; no periodic file checks.
+# Invalid edits keep the last valid setting. enabled = false restores native
+# character behavior when the worker processes the next scene request.
+frame_chara = true
+# Optional local PNG/JPEG replacing the character layer; empty keeps native art.
+# Path is relative to this TOML file. Example: 'iidxbg/frame-chara.png'.
+# Any supported image dimensions are accepted; transparent PNG is recommended.
+# Internally fitted to the 1920x1080 animation canvas, not the stock 700x800 art.
+# A full-size canvas is optional for manual positioning; alpha is preserved.
+# File/path changes are checked on scene requests, not while sitting on a screen.
+# Invalid images retain the previous artwork.
+# This is a static replacement; native character animation is not copied.
+frame_chara_image = ''
+
+# Experimental additional surfaces in version 0.2.1.
+# Set individual switches to true; omitted switches default to false.
+# Each enabled surface chooses independently. Settings above are inherited unless
+# overridden below. Decode, blur and downloads all run on the image worker.
+# A saved edit takes effect after the next query, on a new selection visit/chart.
+# Results has its own switch; all seven switches are independent.
+[surfaces]
+results = true
+# Background behind song-selection UI (not the song's gameplay BGA).
+song_select = false
+# Upper lane-cover artwork; native SUDDEN+ visibility and adjustment stay active.
+sudden_plus = false
+# Lower cover artwork, including the native HIDDEN/LIFT mode behavior.
+lift = false
+# Artwork behind the target-score graph; bars, markers and text stay native.
+# Has an effect only when the game enables this graph component.
+target_graph = false
+# Premium-area background. Implemented for the inspected IIDX 34 / 010-0917
+# build only; other builds ignore this switch.
+# Native canvas is 1280x720; the game scales it itself.
+premium_area = false
+# Concentration-mode play background. Shares the premium-area image while the
+# concentration source section below stays empty; add an override there to use
+# a different source. Also IIDX 34 / 010-0917 only.
+concentration = false
+
+# Per-surface overrides are active by default. Edit each background below.
+# Local folders live under iidxbg; download folders under iidxbg/downloads.
+# Omitted fields inherit the top-level settings. Remove a field to inherit it.
+# source: "file", "local", "remote", or "mixed". fit: "cover" or "contain".
+# Fixed file example in any sources section:
+#   source = "file"
+#   media_path = 'D:\Videos\background.mp4'
+# Local videos are silent loops, stretched to the native canvas (max 1920x1080).
+# File/folder video playback: results, song_select, sudden_plus, lift, target_graph.
+# Premium/concentration use the first frame as a static image.
+# Bind example under [sources.sudden_plus]: bind = "lift"
+# Compatible binding groups: results/song_select; sudden_plus/lift/target_graph;
+# premium_area/concentration. Cycles are rejected. The target switch can be off.
+# Bound lane covers and graph share one file, decoder and GPU descriptor.
+# Custom API example under [sources.<name>.moebooru]:
+#   api_url = "https://example.org/post.json"
+#   media_hosts = ["cdn.example.org"]
+# API sources download PNG/JPEG only; an empty api_url uses the built-in domain.
+# Optional recursive overrides subfolder scanning for this surface.
+# Nested moebooru accepts domain, tags, save_directory, page_max,
+# timeout_seconds and max_images. Domain candidates: konachan.net, konachan.com,
+# yande.re. Omitted API settings inherit [moebooru].
+# [surfaces] separately controls whether each additional background is enabled.
+# A failed query retains that surface's previous image.
+
+[sources.results]
+source = "local"
+local_directory = 'iidxbg/results'
+fit = "contain"
+[sources.results.moebooru]
+save_directory = 'iidxbg/downloads/results'
+# domain = "konachan.net"
+# tags = "rating:safe"
+# max_images = 0
+
+[sources.song_select]
+source = "local"
+local_directory = 'iidxbg/song-select'
+fit = "contain"
+[sources.song_select.moebooru]
+save_directory = 'iidxbg/downloads/song-select'
+# domain = "konachan.net"
+# tags = "rating:safe"
+# max_images = 0
+
+[sources.sudden_plus]
+source = "local"
+local_directory = 'iidxbg/sudden-plus'
+# Center-crop to fill this narrow surface. Use "contain" for the full image.
+fit = "cover"
+[sources.sudden_plus.moebooru]
+save_directory = 'iidxbg/downloads/sudden-plus'
+# domain = "konachan.net"
+# tags = "rating:safe"
+# max_images = 0
+
+[sources.lift]
+source = "local"
+local_directory = 'iidxbg/lift'
+# Center-crop to fill this narrow surface. Use "contain" for the full image.
+fit = "cover"
+[sources.lift.moebooru]
+save_directory = 'iidxbg/downloads/lift'
+# domain = "konachan.net"
+# tags = "rating:safe"
+# max_images = 0
+
+[sources.target_graph]
+source = "local"
+local_directory = 'iidxbg/target-graph'
+# Center-crop to fill this narrow surface. Use "contain" for the full image.
+fit = "cover"
+[sources.target_graph.moebooru]
+save_directory = 'iidxbg/downloads/target-graph'
+# domain = "konachan.net"
+# tags = "rating:safe"
+# max_images = 0
+
+[sources.premium_area]
+source = "local"
+local_directory = 'iidxbg/premium-area'
+# Native canvas is 1280x720. "contain" keeps the whole image with a blurred
+# backdrop; "cover" fills the canvas and center-crops.
+fit = "contain"
+[sources.premium_area.moebooru]
+save_directory = 'iidxbg/downloads/premium-area'
+# domain = "konachan.net"
+# tags = "rating:safe"
+# max_images = 0
+
+# Empty by default: the concentration background reuses the prepared
+# premium-area image. Add any field below (for example local_directory) to
+# prepare an independent image for concentrate mode.
+[sources.concentration]

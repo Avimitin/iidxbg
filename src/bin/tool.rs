@@ -15,6 +15,55 @@ fn main() {
 fn run() -> iidxbg::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("bilibili-check") if args.len() == 4 => {
+            use iidxbg::bilibili::{Api, Mode};
+            let config = Config::load(Path::new(&args[2]))?.for_surface(Surface::Results);
+            let output = Path::new(&args[3]);
+            std::fs::create_dir_all(output)?;
+            let folders = Api::saved()?.folders()?;
+            let mut reports = Vec::new();
+            for mode in [
+                Mode::Video,
+                Mode::Recommendations,
+                Mode::Playlist,
+                Mode::Favourites,
+            ] {
+                let mut selected = config.clone();
+                selected.source = iidxbg::config::Source::Bilibili;
+                selected.bilibili.selection.mode = mode;
+                if mode == Mode::Favourites && selected.bilibili.selection.favourites.is_empty() {
+                    selected.bilibili.selection.favourites = folders
+                        .first()
+                        .map(|f| f.id.to_string())
+                        .unwrap_or_default();
+                }
+                let result = Provider::new(selected)
+                    .and_then(|mut p| p.prepare())
+                    .and_then(|image| {
+                        let file = output.join(format!("{}.png", mode.key()));
+                        pixels::write_preview(&image, &file)?;
+                        Ok(image.label)
+                    });
+                let report = match result {
+                    Ok(label) => serde_json::json!({"mode":mode.key(),"ok":true,"media":label}),
+                    Err(error) => {
+                        serde_json::json!({"mode":mode.key(),"ok":false,"error":error.to_string()})
+                    }
+                };
+                println!("{report}");
+                reports.push(report);
+            }
+            let report = serde_json::json!({"account_verified":true,"folder_count":folders.len(),"checks":reports});
+            std::fs::write(
+                output.join("report.json"),
+                serde_json::to_vec_pretty(&report)?,
+            )?;
+            if reports.iter().any(|r| r["ok"] != true) {
+                return Err(iidxbg::Error::Bilibili(
+                    "one or more checks failed; see report.json".into(),
+                ));
+            }
+        }
         Some("verify") if args.len() == 3 => {
             let profile = profile::verify_file(&std::fs::read(&args[2])?)?;
             println!("Supported {} DLL: {}", profile.label, profile.sha256);
@@ -49,7 +98,7 @@ fn run() -> iidxbg::Result<()> {
         }
         _ => {
             eprintln!(
-                "iidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>"
+                "iidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>"
             );
             std::process::exit(2);
         }

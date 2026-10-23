@@ -174,6 +174,11 @@ impl Provider {
 
     pub fn prepare_media(&mut self) -> Result<Asset> {
         let result = match self.config.source {
+            Source::Bilibili => {
+                let path = crate::bilibili::Api::saved()?
+                    .prepare(&self.config.bilibili, self.previous.as_deref())?;
+                self.load_media(&path.path)
+            }
             Source::File => self.load_media(&self.config.media_path.clone()),
             Source::Local => self.local(),
             Source::Remote => self.remote().map(|p| Asset::Image(Arc::new(p))),
@@ -515,7 +520,7 @@ mod tests {
                 .save(root.join(name))
                 .unwrap();
         }
-        let mut config = Config::parse(include_str!("../iidxbg.toml"))
+        let mut config = Config::parse(include_str!("../tests/fixtures/default.toml"))
             .unwrap()
             .for_surface(Surface::Results);
         config.image.width = 64;
@@ -581,7 +586,7 @@ mod tests {
             requests
         });
         let root = std::env::temp_dir().join(format!("iidxbg-api-{:016x}", fastrand::u64(..)));
-        let mut config = Config::parse(include_str!("../iidxbg.toml"))
+        let mut config = Config::parse(include_str!("../tests/fixtures/default.toml"))
             .unwrap()
             .for_surface(Surface::Results);
         config.source = Source::Remote;
@@ -617,7 +622,7 @@ mod tests {
                 .unwrap();
         }
         let path = root.join("iidxbg.toml");
-        let mut text = include_str!("../iidxbg.toml")
+        let mut text = include_str!("../tests/fixtures/default.toml")
             .split("\n[sources.results]")
             .next()
             .unwrap()
@@ -735,7 +740,7 @@ mod tests {
                 .unwrap();
         }
         let path = root.join("iidxbg.toml");
-        let initial = include_str!("../iidxbg.toml")
+        let initial = include_str!("../tests/fixtures/default.toml")
             .replace("local_directory = 'iidxbg'", "local_directory = 'first'")
             .replace("width = 1920", "width = 64")
             .replace("height = 1080", "height = 64");

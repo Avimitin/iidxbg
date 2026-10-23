@@ -185,6 +185,7 @@ pub fn surface_size(config: &Config, surface: Surface) -> (u32, u32) {
 
 pub fn source_label(source: iidxbg::config::Source) -> &'static str {
     match source {
+        iidxbg::config::Source::Bilibili => "Bilibili",
         iidxbg::config::Source::File => "Fixed file",
         iidxbg::config::Source::Local => "本地",
         iidxbg::config::Source::Remote => "远程",

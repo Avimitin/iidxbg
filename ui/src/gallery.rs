@@ -41,7 +41,7 @@ impl AppView {
         let viewport = window.viewport_size();
         // The board is deliberately full-bleed: no page padding and no hero.
         // The custom title bar is the only chrome around it.
-        let width = viewport.width.as_f32().max(320.);
+        let width = (viewport.width.as_f32() - 154.).max(320.);
         let height = (viewport.height.as_f32() - TITLE_BAR_HEIGHT).max(240.);
         let cell_width = width / GRID_COLUMNS;
 

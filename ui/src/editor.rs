@@ -27,9 +27,12 @@ pub(crate) enum SurfaceTextField {
     TimeoutSeconds,
     MaxImages,
     FrameCharaImage,
+    BiliVideo,
+    BiliPlaylist,
+    BiliFavourites,
 }
 impl SurfaceTextField {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 13] = [
         Self::MediaPath,
         Self::LocalDirectory,
         Self::ApiUrl,
@@ -40,6 +43,9 @@ impl SurfaceTextField {
         Self::TimeoutSeconds,
         Self::MaxImages,
         Self::FrameCharaImage,
+        Self::BiliVideo,
+        Self::BiliPlaylist,
+        Self::BiliFavourites,
     ];
     fn key(self) -> &'static str {
         match self {
@@ -53,11 +59,17 @@ impl SurfaceTextField {
             Self::TimeoutSeconds => "timeout_seconds",
             Self::MaxImages => "max_images",
             Self::FrameCharaImage => "frame_chara_image",
+            Self::BiliVideo => "video",
+            Self::BiliPlaylist => "playlist",
+            Self::BiliFavourites => "favourites",
         }
     }
     fn path(self, surface: Surface) -> Vec<&'static str> {
         match self {
             Self::FrameCharaImage => vec!["selection", self.key()],
+            Self::BiliVideo | Self::BiliPlaylist | Self::BiliFavourites => {
+                vec!["sources", surface.name(), "bilibili", self.key()]
+            }
             Self::MediaPath | Self::LocalDirectory => vec!["sources", surface.name(), self.key()],
             _ => vec!["sources", surface.name(), "moebooru", self.key()],
         }
@@ -75,6 +87,9 @@ impl SurfaceTextField {
             Self::TimeoutSeconds => c.moebooru.timeout_seconds.to_string(),
             Self::MaxImages => c.moebooru.max_images.to_string(),
             Self::FrameCharaImage => c.selection.frame_chara_image.to_string_lossy().into_owned(),
+            Self::BiliVideo => c.bilibili.selection.video,
+            Self::BiliPlaylist => c.bilibili.selection.playlist,
+            Self::BiliFavourites => c.bilibili.selection.favourites,
         }
     }
 }
@@ -352,6 +367,7 @@ pub(crate) fn render_editor(
             (Source::Local, "文件夹随机"),
             (Source::Remote, "Moebooru API"),
             (Source::Mixed, "文件夹 + API"),
+            (Source::Bilibili, "Bilibili"),
         ] {
             sources = sources.child(
                 widgets::segment_button(
@@ -365,6 +381,104 @@ pub(crate) fn render_editor(
             );
         }
         body = body.child(sources);
+        if c.source == Source::Bilibili {
+            use iidxbg::bilibili::Mode;
+            let mut modes = h_flex().gap_2().flex_wrap();
+            for (mode, label) in [
+                (Mode::Video, "固定视频"),
+                (Mode::Recommendations, "随机推荐"),
+                (Mode::Playlist, "合集 / 系列"),
+                (Mode::Favourites, "收藏夹"),
+            ] {
+                modes = modes.child(
+                    widgets::segment_button(
+                        SharedString::from(format!("bili-mode-{}", mode.key())),
+                        label,
+                        c.bilibili.selection.mode == mode,
+                    )
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.commit_surface(0, cx, |doc| {
+                            store::set_string(
+                                doc,
+                                &["sources", surface.name(), "bilibili", "mode"],
+                                mode.key(),
+                            )
+                        });
+                    })),
+                );
+            }
+            body = body.child(modes);
+            match c.bilibili.selection.mode {
+                Mode::Video => {
+                    body = body.child(field_row(
+                        editor,
+                        SurfaceTextField::BiliVideo,
+                        "视频链接 / BV",
+                        false,
+                        cx,
+                    ))
+                }
+                Mode::Playlist => {
+                    body = body.child(field_row(
+                        editor,
+                        SurfaceTextField::BiliPlaylist,
+                        "合集 / 系列链接",
+                        false,
+                        cx,
+                    ))
+                }
+                Mode::Favourites => {
+                    body = body.child(field_row(
+                        editor,
+                        SurfaceTextField::BiliFavourites,
+                        "收藏夹链接 / ID",
+                        false,
+                        cx,
+                    ));
+                    let mut folders = h_flex().gap_2().flex_wrap();
+                    for folder in &view.bili.folders {
+                        let id = folder.id.to_string();
+                        folders = folders.child(
+                            Button::new(SharedString::from(format!("fav-{}", folder.id)))
+                                .small()
+                                .outline()
+                                .label(folder.title.clone())
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.commit_surface(0, cx, |doc| {
+                                        store::set_string(
+                                            doc,
+                                            &["sources", surface.name(), "bilibili", "favourites"],
+                                            &id,
+                                        )
+                                    });
+                                    // The overlay temporarily owns its editor during render.
+                                    if let Some(editor) = &view.editor {
+                                        editor
+                                            .input_for(SurfaceTextField::BiliFavourites)
+                                            .update(cx, |state, cx| {
+                                                state.set_value(id.clone(), window, cx)
+                                            });
+                                    }
+                                })),
+                        );
+                    }
+                    body = body.child(folders);
+                }
+                Mode::Recommendations => {
+                    body = body.child(
+                        div()
+                            .text_sm()
+                            .child("使用已登录账号的推荐流，每次准备随机选择一个视频。"),
+                    )
+                }
+            }
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted_ink())
+                    .child("先缓存 H.264 视频再播放。登录和收藏夹刷新请前往侧栏 Bilibili 页面。"),
+            );
+        }
         if c.source == Source::File {
             body = body.child(field_row(
                 editor,

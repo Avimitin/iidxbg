@@ -185,3 +185,44 @@ The exact 010-0917 selection adapter masks the verified frame_layer2 root only
 while a replacement AFP sprite is valid. Native visibility is restored before
 original update/cleanup, and native release observations invalidate cached owner
 identities. Original movie rendering still runs. See the dated build analysis.
+
+## Bilibili provider (2026-10-23)
+
+`Source::Bilibili` adds a worker-only API/cache adapter. Each surface has an
+optional `Selection` (video, recommendations, playlist or favourites), inherited
+through the existing compatible binding graph. Collection/series and favourites
+are managed on Bilibili, not as a local text playlist. Listing selects a random
+page, then tries at most three candidates, preferring a different BV from the
+previous choice. Fixed links preserve the requested part. Web recommendation
+requests require a logged-in account; public video/collection requests can be
+anonymous. No viewing-progress or account-content writes are made.
+
+WBI keys come from navigation, including its anonymous -101 response. API requests
+have no redirects; Cookie headers are sent only to the fixed API/passport hosts.
+A separate unauthenticated client downloads AVC renditions from validated HTTPS
+bilivideo CDN hosts with bounded time/bytes and redirect checks. Only a complete
+temporary file is atomically published. Download URLs and credentials are not
+logged. Unsupported formats, permissions, account expiry and API failures retain
+the existing media via the worker's normal failure path.
+
+Cache reservation/eviction is serialized by a Windows exclusive file handle,
+including across the UI and game processes. A read lease denies modification or
+deletion from publication through decoder startup. The decoder retains its own
+lease until retirement, so pruning cannot invalidate a frozen or active asset.
+Pruning touches only validated downloader filenames and skips reparse entries.
+The normal visit freeze, owned BGRA publication, shared decoder/texture lifetime,
+reset behavior and native exact-build guards are unchanged. No new game RVAs,
+ABI assumptions or native hooks were introduced.
+
+The UI restores a two-page sidebar. A separate account thread handles QR creation,
+two-second polling, expiry, cancellation, profile/folder refresh and local logout.
+Generation numbers reject stale UI responses. Sessions are DPAPI-protected for
+the current Windows user under LOCALAPPDATA, outside the configuration document.
+They cannot be copied to a different machine/account; login belongs on the game
+host. Automatic cookie refresh is not implemented; an expired session requests
+another scan. Prepared previews use the same provider as the DLL.
+
+Protocol references inspected: PiliPlus `lib/http/video.dart`, `lib/http/fav.dart`,
+`lib/utils/wbi_sign.dart`, and wiliwili's QR-login flow. The Rust adapter is an
+independent implementation of these HTTP protocols. Current QR generation was
+verified live to return `account.bilibili.com/h5/account-h5/auth/scan-web`.

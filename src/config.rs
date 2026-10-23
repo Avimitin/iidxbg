@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
+    Bilibili,
     File,
     Local,
     Remote,
@@ -28,6 +29,8 @@ pub struct Config {
     pub media_path: PathBuf,
     pub recursive: bool,
     pub moebooru: Moebooru,
+    #[serde(default)]
+    pub bilibili: crate::bilibili::Settings,
     pub image: Image,
     #[serde(default)]
     pub surfaces: Surfaces,
@@ -125,6 +128,7 @@ pub struct Sources {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct SourceOverride {
+    pub bilibili: Option<crate::bilibili::Selection>,
     pub bind: Option<Surface>,
     pub source: Option<Source>,
     pub media_path: Option<PathBuf>,
@@ -139,6 +143,7 @@ impl SourceOverride {
     /// requesting an independent one.
     pub fn is_empty(&self) -> bool {
         self.bind.is_none()
+            && self.bilibili.is_none()
             && self.source.is_none()
             && self.media_path.is_none()
             && self.local_directory.is_none()
@@ -351,6 +356,9 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let mut value = Self::parse(&std::fs::read_to_string(path)?)?;
         let root = path.parent().unwrap_or(Path::new("."));
+        if value.bilibili.cache_directory.is_relative() {
+            value.bilibili.cache_directory = root.join(&value.bilibili.cache_directory);
+        }
         if !value.media_path.as_os_str().is_empty() && value.media_path.is_relative() {
             value.media_path = root.join(&value.media_path);
         }
@@ -481,12 +489,15 @@ impl Config {
         if let Some(v) = o.source {
             c.source = v;
         }
+        if let Some(v) = &o.bilibili {
+            c.bilibili.selection = v.clone();
+        }
         if let Some(v) = &o.media_path {
             c.media_path = v.clone();
         }
         // Preserve old result-only configuration until a surface source is chosen.
         if surface == Surface::Results
-            && o.source != Some(Source::File)
+            && o.source.is_none()
             && !self.results_video.as_os_str().is_empty()
         {
             c.source = Source::File;
@@ -557,6 +568,7 @@ impl Config {
     }
 
     fn validate_base(&self) -> Result<()> {
+        self.bilibili.validate()?;
         self.moebooru.validate()?;
         if !(64..=3840).contains(&self.image.width)
             || !(64..=2160).contains(&self.image.height)
@@ -587,7 +599,7 @@ mod tests {
     use super::*;
     #[test]
     fn binding_chains_use_root_settings_but_independent_enable_and_reject_cycles() {
-        let mut c = Config::parse(include_str!("../iidxbg.toml")).unwrap();
+        let mut c = Config::parse(include_str!("../tests/fixtures/default.toml")).unwrap();
         c.sources.sudden_plus.bind = Some(Surface::Lift);
         c.sources.lift.bind = Some(Surface::TargetGraph);
         c.sources.target_graph.source = Some(Source::File);
@@ -613,7 +625,7 @@ mod tests {
 
     #[test]
     fn custom_api_policy_is_scoped_to_endpoint_and_explicit_cdn_hosts() {
-        let mut c = Config::parse(include_str!("../iidxbg.toml")).unwrap();
+        let mut c = Config::parse(include_str!("../tests/fixtures/default.toml")).unwrap();
         c.moebooru.api_url = "http://localhost:18888/post.json".into();
         c.moebooru.media_hosts = vec!["cdn.example.org".into()];
         c.validate().unwrap();
@@ -639,7 +651,7 @@ mod tests {
     }
     #[test]
     fn selection_character_defaults_and_strict_live_settings() {
-        let shipped = include_str!("../iidxbg.toml");
+        let shipped = include_str!("../tests/fixtures/default.toml");
         let c = Config::parse(shipped).unwrap();
         assert!(!c.hide_frame_chara());
         assert!(c.selection.frame_chara_image.as_os_str().is_empty());
@@ -667,7 +679,7 @@ mod tests {
             "{}\n[sources.song_select]\nsource = 'remote'\nfit = 'contain'\n\
             [sources.song_select.moebooru]\ndomain = 'yande.re'\nsave_directory = 'selection-cache'\nmax_images = 25\n\
             [sources.lift]\nlocal_directory = 'lower'\n",
-            include_str!("../iidxbg.toml")
+            include_str!("../tests/fixtures/default.toml")
                 .split("\n[sources.results]")
                 .next()
                 .unwrap()
@@ -705,7 +717,7 @@ mod tests {
     }
     #[test]
     fn surfaces_are_independent_opt_ins_and_old_configs_still_load() {
-        let shipped = include_str!("../iidxbg.toml");
+        let shipped = include_str!("../tests/fixtures/default.toml");
         let old = shipped.split("[surfaces]").next().unwrap();
         assert_eq!(
             toml::from_str::<Config>(old).unwrap().surfaces,
@@ -730,7 +742,7 @@ mod tests {
 
     #[test]
     fn moebooru_domains_and_rejection_of_removed_config_names() {
-        let shipped = include_str!("../iidxbg.toml");
+        let shipped = include_str!("../tests/fixtures/default.toml");
         for (domain, endpoint) in [
             ("konachan.net", "https://konachan.net/post.json"),
             ("konachan.com", "https://konachan.com/post.json"),
@@ -783,7 +795,7 @@ mod tests {
 
     #[test]
     fn shipped_config_and_strict_limits() {
-        let shipped = include_str!("../iidxbg.toml");
+        let shipped = include_str!("../tests/fixtures/default.toml");
         let mut c: Config = toml::from_str(shipped).unwrap();
         c.validate().unwrap();
         for (surface, folder) in [
@@ -835,7 +847,7 @@ mod tests {
 
     #[test]
     fn toml_comments_paths_and_errors() {
-        let shipped = include_str!("../iidxbg.toml");
+        let shipped = include_str!("../tests/fixtures/default.toml");
         let text = shipped.replace(
             "local_directory = 'iidxbg'",
             r"local_directory = 'D:\Pictures\背景' # literal Windows path",
@@ -851,19 +863,9 @@ mod tests {
         ] {
             assert!(toml::from_str::<Config>(&invalid).is_err());
         }
-        let c = Config::load(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("iidxbg.toml")
-                .as_path(),
-        )
-        .unwrap();
-        assert_eq!(
-            c.local_directory,
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("iidxbg")
-        );
-        assert_eq!(
-            c.moebooru.save_directory,
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("iidxbg/downloads")
-        );
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let c = Config::load(&root.join("default.toml")).unwrap();
+        assert_eq!(c.local_directory, root.join("iidxbg"));
+        assert_eq!(c.moebooru.save_directory, root.join("iidxbg/downloads"));
     }
 }

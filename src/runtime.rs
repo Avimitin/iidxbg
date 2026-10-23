@@ -1199,7 +1199,7 @@ mod selection_reload_tests {
         let root = std::env::temp_dir().join(format!("iidxbg-event-{:016x}", fastrand::u64(..)));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("iidxbg.toml");
-        let text = include_str!("../iidxbg.toml");
+        let text = include_str!("../tests/fixtures/default.toml");
         std::fs::write(&path, text).unwrap();
         let mut providers = Providers::new(Config::load(&path).unwrap()).unwrap();
         let mut character = crate::character::LocalImage::default();

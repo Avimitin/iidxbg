@@ -64,6 +64,8 @@ impl Default for PreviewSlot {
 }
 
 pub struct AppView {
+    pub(crate) bili: crate::bilibili::State,
+    pub(crate) bili_page: bool,
     pub(crate) store: ConfigStore,
     pub(crate) editor: Option<SurfaceEditor>,
     pub(crate) previews: [PreviewSlot; Surface::COUNT],
@@ -93,6 +95,8 @@ impl AppView {
         preview::spawn_worker(store.path().to_path_buf(), job_rx, outcome_tx);
 
         let mut this = Self {
+            bili: crate::bilibili::State::new(cx),
+            bili_page: false,
             store,
             editor: None,
             previews: std::array::from_fn(|_| PreviewSlot::default()),
@@ -299,6 +303,15 @@ impl AppView {
         }
     }
 
+    pub(crate) fn refresh_bilibili_previews(&mut self, cx: &mut Context<Self>) {
+        for surface in Surface::ALL {
+            if self.store.config().for_surface(surface).source == iidxbg::config::Source::Bilibili {
+                self.previews[surface.index()].fingerprint = None;
+            }
+        }
+        self.schedule_preview_sync(cx, 0);
+    }
+
     fn slot_is_current(&self, index: usize, spec: &PreviewSpec) -> bool {
         let slot = &self.previews[index];
         slot.fingerprint.as_ref() == Some(&spec.fingerprint)
@@ -431,7 +444,36 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let overlay = self.render_editor_overlay(window, cx);
-        let content = self.render_gallery(window, cx);
+        let content = if self.bili_page {
+            self.render_bilibili(cx)
+        } else {
+            self.render_gallery(window, cx)
+        };
+        let sidebar = v_flex()
+            .w(px(154.))
+            .h_full()
+            .flex_shrink_0()
+            .p_3()
+            .gap_2()
+            .bg(theme::sidebar_bg())
+            .child(
+                widgets::segment_button("page-surfaces", "显示组件", !self.bili_page).on_click(
+                    cx.listener(|view, _, _, cx| {
+                        view.bili_page = false;
+                        view.editor = None;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
+                widgets::segment_button("page-bilibili", "Bilibili", self.bili_page).on_click(
+                    cx.listener(|view, _, _, cx| {
+                        view.bili_page = true;
+                        view.editor = None;
+                        cx.notify();
+                    }),
+                ),
+            );
         let title_bar = TitleBar::new()
             .bg(theme::sidebar_bg())
             .border_color(theme::line())
@@ -477,6 +519,7 @@ impl Render for AppView {
                     .w_full()
                     .flex_1()
                     .min_h_0()
+                    .child(sidebar)
                     .child(v_flex().flex_1().min_w_0().h_full().child(content)),
             )
             .when_some(overlay, |this, overlay| this.child(overlay))

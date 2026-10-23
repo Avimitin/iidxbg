@@ -1,3 +1,4 @@
+pub mod bilibili;
 pub mod character;
 pub mod config;
 pub mod hook_chain;
@@ -57,6 +58,8 @@ pub enum Error {
     Native(&'static str),
     #[error("Video: {0}")]
     Video(String),
+    #[error("Bilibili: {0}")]
+    Bilibili(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -299,12 +299,19 @@ pub fn load(path: &Path, width: u32, height: u32) -> Result<Arc<Video>> {
                 SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
             }
             let setup = || -> Result<_> {
+                use std::os::windows::fs::OpenOptionsExt;
+                // Keep the source stable until its decoder retires. Cache pruning
+                // cannot remove a file still used by a frozen or active asset.
+                let file_lease = std::fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(1)
+                    .open(&path)?;
                 let platform = Platform::start()?;
                 let mut reader = Reader::open(&path, width, height)?;
                 let (_, _, first) = reader.read()?.ok_or(Error::Video("empty video".into()))?;
-                Ok((platform, reader, Arc::new(Video::new(first))))
+                Ok((platform, reader, Arc::new(Video::new(first)), file_lease))
             };
-            let (platform, mut reader, video) = match setup() {
+            let (platform, mut reader, video, _file_lease) = match setup() {
                 Ok(v) => v,
                 Err(e) => {
                     let _ = tx.send(Err(e));

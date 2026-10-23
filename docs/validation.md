@@ -1049,3 +1049,110 @@ Evidence: `target/verification-20261023/` contains selection/gameplay/result
 capture pairs and `plugin.log`. The user's clip was restored to the remote
 configuration after testing, and the game was left on the moving result screen.
 No new high-grade video, DP/player-2 or forced device-reset coverage is claimed.
+
+## Bilibili provider and account UI — 2026-10-23
+
+Added fixed-video, personalized recommendation, collection/series and favourites
+sources, plus a two-page sidebar with QR login and account favourites discovery.
+The user confirmed QR login on the game host. Its account page displayed the
+profile and folder list; no credentials were copied to the development machine.
+The user selected a favourites folder in the result surface, and that choice was
+preserved during deployment.
+
+Checks: 44 native tests and 13 UI tests passed; both clippy runs denied warnings;
+native/UI release builds, formatting, diff whitespace and DLL SDK smoke checks
+passed. Two additional opt-in checks passed: live QR creation/polling, and real
+Media Foundation playback/restart using the Bilibili-downloaded H.264 sample.
+The remaining ignored fixture test is the earlier colour-orientation test.
+Tests now use a committed default fixture instead of the user's editable root
+TOML. A cold-download regression test covers closing the temporary writer before
+acquiring the Windows read lease.
+
+Anonymous local tests fetched `BV1Pqi4BzEkP` and selected a video from its public
+collection. Sample rendition: AVC, 768x480, 30 fps, 1,819,053 bytes, SHA-256
+`358103174824e3dee2a5194cdae8b719da8d1574c8a158a9d794e8f9d43ed986`.
+No FFmpeg, remux or transcode was used. A separate full-decode benchmark produced
+1,093 frames. The provider's first-frame output and the UI preview were inspected.
+
+Authenticated verification ran on the game host using
+`iidxbg-tool bilibili-check iidxbg-bilibili-test.toml iidxbg-bilibili-verification`.
+All four modes returned a complete cached video and decoded 1920x1080 preview.
+The report and generated images stay outside the repository; local evidence is
+`target/bilibili-remote-report.json` and `target/bilibili-favourites-preview.png`.
+The user launched the verification script and confirmed the existing Spice UAC
+prompt. Account sessions use current-user DPAPI, not a shared plaintext file.
+
+Deployed plugin SHA-256:
+`ceb6b5042edb59dc898e3bbe2c1fb37209002d911e9529cf3a315ea3989407ff`.
+Configuration app SHA-256:
+`7e1b1ea00b7e4500ec0c139a204d1a46876594d9988d43df6f1ed39e47fa8144`.
+The existing exact IIDX34 input remains
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`.
+No native RVA or ABI changes were made; hook/lifetime evidence remains in the
+existing build analyses. The only decoder lifetime addition is a source-file
+read lease, tested to prevent eviction while a prepared/active decoder owns it.
+The existing monitor-check helper was applied in memory only; game assets/DLLs
+and IIDX33 were not changed.
+
+Actual in-game testing also passed on the deployed build: guest Standard SP,
+Caramel Pain ANOTHER 8, EX HARD, no note input, ending FAILED/F after six POORs.
+The selected favourites source played a moving video behind the native result
+score/gauge UI. Captures four seconds apart show different video frames with
+the result UI intact. Evidence: `target/verification-20261023/bilibili-result-a.jpg`,
+`bilibili-result-b.jpg`, and `bilibili-plugin.log` in the same directory. No
+decoder/native fault was logged in this run. The game was left on this result
+screen and the user's favourites selection was retained. This run verifies
+Bilibili on the low-grade result path; it does not add Bilibili-specific live
+coverage for high-grade results, other surfaces, DP or player 2. Additional
+surface coverage is recorded below.
+
+Unknowns: long-duration account expiry/reauthentication, Bilibili rate-limit and
+future API changes, very large collections, and device-loss/DP/P2 stress. An
+anonymous collection probe returned -352 on one later request; ordinary API
+errors are surfaced and retain previous media. Automatic cookie refresh and
+progressive network streaming are not implemented.
+
+### Bilibili SUDDEN+ and target graph follow-up
+
+Actual in-game testing used the same deployed plugin/game hashes above, with no
+code, hook, RVA or ABI changes. First, SUDDEN+, LIFT and the graph shared a fixed
+Bilibili source through the existing LIFT binding. The graph visibly advanced;
+the log showed all three sprites sharing descriptor `0x129f0cb08` (priorities
+108, 108 and 145). The small native cover exposed only black video margins, so
+this first pass alone did not establish visible SUDDEN+ motion.
+
+At the user's request, a second pass assigned four independent modes:
+
+| Surface | Bilibili mode |
+| --- | --- |
+| Results | Existing user favourites folder |
+| Song select | Personalized recommendations |
+| SUDDEN+ | Fixed video `BV1Pqi4BzEkP` |
+| Target graph | Collection `https://space.bilibili.com/12429295/lists/7223102?type=season` |
+
+Reproduction: enter guest Standard SP, skip tutorials, enable native SUDDEN+
+and PACEMAKER rotate graph, select Caramel Pain BEGINNER 1 to allow more
+observation time, then hold Start and turn the scratch input to raise SUDDEN+
+SUB-LENGTH to 624. Capture pairs three seconds apart show independent moving
+video on SUDDEN+ and behind the native graph bars/labels. A separate selection
+capture pair shows the personalized recommendation moving behind the song UI.
+The centre gameplay BGA remains the game's original video.
+
+Evidence is in `target/verification-20261023/`: `bilibili-modes-selection-a.jpg`
+and `-b.jpg`, `bilibili-modes-adjust2.jpg`, `bilibili-modes-play-a.jpg` and
+`-b.jpg`, `bilibili-surfaces-plugin.log`, and the temporary/original TOML
+snapshots. The authenticated SUDDEN+ cached rendition SHA-256 was
+`ab53600d5bbeb605e8ec42def09cd1c499023617adf4fa0e114ddb0b760b98cb`,
+distinct from the earlier anonymous sample. Independent sprites had descriptors
+`0x11867e1b8`, `0x11867e028` and `0x11867db28`; the graph canvas was 432x870.
+The original remote TOML was restored byte-for-byte after capturing playback; these assignments were
+temporary verification settings. No decoder/native fault appeared in the run.
+
+New limitation found: `Provider::load_media` passes only canvas dimensions to
+`video::load`; the selected image `fit` policy is not passed to the MF reader.
+MF's aspect-preserving conversion adds black margins on these narrow canvases,
+even with `fit = "cover"`. Native cover clipping can therefore reveal only
+black at small SUDDEN+ heights. Enlarging the cover verifies playback but does
+not fix the fitting defect. Cover fitting for video remains unresolved; these
+captures must not be interpreted as validation of a fully filled cover at all
+heights. No DP/P2, high-grade result or device-loss coverage was added.

@@ -14,7 +14,8 @@
 - 可选替换 **选曲画面、SUDDEN+、LIFT、目标分数图** 等位置
 - 支持固定图片/视频、文件夹随机、Moebooru 兼容 API，以及本地/在线混合
 - 结算、选曲、SUDDEN+、LIFT、目标分数图支持静音循环视频；在对应组件中选择「固定图片 / 视频」
-- 配置界面只有一个组件总览页面，没有全局选项和侧栏；结算也有独立开关
+- 配置界面侧栏包含「显示组件」和「Bilibili」；每个组件有独立开关和来源，没有全局开关页面
+- Bilibili 来源支持固定视频、随机推荐、合集/系列、收藏夹；在第二页扫码登录
 - SUDDEN+ 可绑定 LIFT，共享选中的媒体、解码器和纹理；绑定目标关闭时仍可作为来源
 - 附带 **iidxbg-config.exe** 配置界面，不需要手动编辑配置文件
 - 每次有效修改立即保存，没有“保存”按钮
@@ -76,7 +77,52 @@
 
 最新版本：[GitHub Releases](https://github.com/Avimitin/iidxbg/releases)
 
-当前版本：**0.2.2**
+当前已发布版本：**0.3.0**。Bilibili 功能在当前开发版中。
+
+## Bilibili 来源
+
+在**运行游戏的机器**上打开配置程序，进入侧栏「Bilibili」，使用手机 App 扫码并确认。
+账号 Cookie 用 Windows DPAPI 加密，保存在当前用户的 `%LOCALAPPDATA%\iidxbg\bilibili-session.dat`，
+不会写进 TOML。配置程序和游戏须使用同一台机器、同一个 Windows 用户；登录失效时重新扫码。
+「退出本机登录」删除本机凭据，已下载的视频缓存保留。
+
+返回「显示组件」，将需要的组件来源设为 Bilibili：
+
+| 模式 | 输入与行为 |
+|---|---|
+| 固定视频 | 完整 `https://www.bilibili.com/video/BV…` 链接、BV 号或 av 号；支持链接中的 `p=2` 分 P |
+| 随机推荐 | 使用已登录账号的网页推荐流；随机选一个可播放的视频 |
+| 合集 / 系列 | UP 主空间的合集/系列链接，例如 `https://space.bilibili.com/123/lists/456?type=season`；随机选视频 |
+| 收藏夹 | 收藏夹链接（含 `fid`）或文件夹 ID，也可直接选择账号页加载的收藏夹；随机选视频 |
+
+收藏夹内容可在手机 App 中维护，插件在下一次准备时重新读取。短链接 `b23.tv` 暂不支持，
+请使用展开后的完整链接。不可访问、删除、超出时长或没有 H.264 版本的视频会跳过；准备失败
+保留先前媒体，首次尚无媒体则使用游戏原图。推荐结果可能与手机客户端不同。
+
+视频会先完整缓存，再交给现有 Windows Media Foundation 解码器；不是边下载边播放。
+播放静音循环，不发送观看进度、点赞或收藏操作。每次结算固定一个视频；SUDDEN+/LIFT/目标图
+仍可绑定并共享解码器及纹理。Premium/集中模式仍仅显示第一帧。
+
+可选 TOML 设置（省略时使用这些默认值）：
+
+```toml
+[bilibili]
+cache_directory = 'iidxbg/bilibili-cache'
+quality = 64                 # 16=360p, 32=480p, 64=720p, 80=1080p，上限受账号权限影响
+max_download_mb = 128
+cache_mb = 2048
+max_duration_seconds = 600
+
+# 示例：给结算选择收藏夹；编辑已有 section，不要重复添加。
+[sources.results]
+source = "bilibili"
+[sources.results.bilibili]
+mode = "favourites"          # video / recommendations / playlist / favourites
+favourites = "123456"
+```
+
+缓存只清理插件自己命名的文件；正在使用的视频被保留。Bilibili 的客户端接口可能变化，
+风控或网络错误会显示在预览中。无需捆绑 FFmpeg。
 
 ## License
 

@@ -88,7 +88,7 @@ mod tests {
         image::RgbaImage::from_pixel(1920, 1080, image::Rgba([10u8, 20, 30, 128]))
             .save(&first)
             .unwrap();
-        let mut config = Config::parse(include_str!("../iidxbg.toml")).unwrap();
+        let mut config = Config::parse(include_str!("../tests/fixtures/default.toml")).unwrap();
         config.selection.frame_chara_image = PathBuf::from("first.png");
         let mut loader = LocalImage::default();
         let Update::Image(prepared) = loader.refresh(&config, &root).unwrap() else {

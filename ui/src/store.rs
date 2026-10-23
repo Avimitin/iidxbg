@@ -221,6 +221,7 @@ pub fn set_u32(doc: &mut DocumentMut, path: &[&str], value: u32) {
 
 pub fn source_key(source: Source) -> &'static str {
     match source {
+        Source::Bilibili => "bilibili",
         Source::File => "file",
         Source::Local => "local",
         Source::Remote => "remote",
@@ -466,6 +467,51 @@ mod tests {
         assert!(store.edit(|doc| set_string(doc, &["results_video"], "")));
         assert!(store.config().results_video.as_os_str().is_empty());
 
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn bilibili_modes_preserve_each_selection_and_surface_bindings() {
+        use iidxbg::bilibili::Mode;
+        let (dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        assert!(store.edit(|doc| {
+            set_string(doc, &["sources", "lift", "source"], "bilibili");
+            set_string(
+                doc,
+                &["sources", "lift", "bilibili", "video"],
+                "BV1Pqi4BzEkP",
+            );
+            set_string(
+                doc,
+                &["sources", "lift", "bilibili", "playlist"],
+                "https://space.bilibili.com/123/lists/456?type=season",
+            );
+            set_string(doc, &["sources", "lift", "bilibili", "favourites"], "789");
+            set_string(doc, &["sources", "sudden_plus", "bind"], "lift");
+        }));
+        for mode in [
+            Mode::Video,
+            Mode::Recommendations,
+            Mode::Playlist,
+            Mode::Favourites,
+        ] {
+            assert!(store.edit(|doc| set_string(
+                doc,
+                &["sources", "lift", "bilibili", "mode"],
+                mode.key()
+            )));
+            assert!(store.reload());
+            let selected = store
+                .config()
+                .for_surface(Surface::SuddenPlus)
+                .bilibili
+                .selection;
+            assert_eq!(selected.mode, mode);
+            assert_eq!(selected.video, "BV1Pqi4BzEkP");
+            assert_eq!(selected.favourites, "789");
+        }
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();
     }

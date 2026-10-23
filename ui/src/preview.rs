@@ -18,6 +18,7 @@ use std::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreviewFingerprint {
+    pub bilibili: iidxbg::bilibili::Settings,
     pub enabled: bool,
     pub target: Surface,
     pub source: Source,
@@ -44,6 +45,7 @@ impl PreviewFingerprint {
     /// state. Used to copy the premium-area image to concentration mode.
     pub fn same_source(&self, other: &Self) -> bool {
         self.target == other.target
+            && self.bilibili == other.bilibili
             && self.source == other.source
             && self.media_path == other.media_path
             && self.api_url == other.api_url
@@ -83,6 +85,7 @@ pub fn specs(config: &Config) -> [PreviewSpec; Surface::COUNT] {
             target,
             enabled,
             fingerprint: PreviewFingerprint {
+                bilibili: resolved.bilibili,
                 enabled,
                 target,
                 source: resolved.source,
