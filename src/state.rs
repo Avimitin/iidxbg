@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 pub enum Pending {
     Image(Arc<Prepared>),
+    Video(Arc<crate::video::Video>),
     Disabled,
 }
 
@@ -11,6 +12,7 @@ pub enum Pending {
 pub struct Selection {
     pub active: bool,
     pub selected: Option<Arc<Prepared>>,
+    pub video: Option<Arc<crate::video::Video>>,
 }
 
 impl Selection {
@@ -20,8 +22,18 @@ impl Selection {
         }
         self.active = true;
         match pending {
-            Some(Pending::Image(image)) => self.selected = Some(image),
-            Some(Pending::Disabled) => self.selected = None,
+            Some(Pending::Image(image)) => {
+                self.selected = Some(image);
+                self.video = None;
+            }
+            Some(Pending::Video(video)) => {
+                self.selected = Some(video.first.clone());
+                self.video = Some(video);
+            }
+            Some(Pending::Disabled) => {
+                self.selected = None;
+                self.video = None;
+            }
             None => {}
         }
     }
@@ -60,6 +72,27 @@ mod tests {
         let mut s = Selection::default();
         s.enter(None);
         s.enter(Some(picture("late")));
+        assert!(s.selected.is_none());
+    }
+
+    #[test]
+    fn video_choice_is_frozen_until_next_visit_and_disable_clears_it() {
+        let Pending::Image(first) = picture("first frame") else {
+            unreachable!()
+        };
+        let video = Arc::new(crate::video::Video::new(first));
+        let mut s = Selection::default();
+        s.enter(Some(picture("image")));
+        s.enter(Some(Pending::Video(video.clone())));
+        assert!(s.video.is_none());
+        s.leave();
+        s.enter(Some(Pending::Video(video.clone())));
+        assert!(Arc::ptr_eq(s.video.as_ref().unwrap(), &video));
+        s.enter(Some(Pending::Disabled));
+        assert!(s.video.is_some());
+        s.leave();
+        s.enter(Some(Pending::Disabled));
+        assert!(s.video.is_none());
         assert!(s.selected.is_none());
     }
 

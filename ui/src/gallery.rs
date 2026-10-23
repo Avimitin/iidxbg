@@ -39,16 +39,15 @@ impl AppView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let viewport = window.viewport_size();
-        let metrics = theme::layout_metrics(viewport.width.as_f32());
         // The board is deliberately full-bleed: no page padding and no hero.
-        // The sidebar and the custom title bar are the only chrome around it.
-        let width = (viewport.width.as_f32() - metrics.sidebar).max(320.);
+        // The custom title bar is the only chrome around it.
+        let width = viewport.width.as_f32().max(320.);
         let height = (viewport.height.as_f32() - TITLE_BAR_HEIGHT).max(240.);
         let cell_width = width / GRID_COLUMNS;
 
         // The top band has four 16:9 tiles. Give it at least 30% of the content
         // height so the wide surfaces get more breathing room; the remaining
-        // lower band becomes four portrait columns. The cap keeps a very short
+        // lower band becomes three portrait columns. The cap keeps a very short
         // window from turning the top band into a second full-height row.
         let top_height = (cell_width / WIDE_RATIO).clamp(height * 0.30, height * 0.38);
         let bottom_height = height - top_height;
@@ -65,26 +64,13 @@ impl AppView {
         }
         for (column, surface) in BOTTOM_ROW.iter().enumerate() {
             let region = Region {
-                x: column as f32 * cell_width,
+                x: column as f32 * (width / 3.),
                 y: top_height,
-                width: cell_width,
+                width: (width / 3.),
                 height: bottom_height,
             };
             modules.push(self.render_surface_module(*surface, region, window, cx));
         }
-
-        // The remaining lower column is a utility module, not a surface. It
-        // completes the Metro-style mosaic and keeps the grid edge-to-edge.
-        modules.push(self.render_global_module(
-            Region {
-                x: 3. * cell_width,
-                y: top_height,
-                width: cell_width,
-                height: bottom_height,
-            },
-            window,
-            cx,
-        ));
 
         div()
             .id("gallery-grid")
@@ -132,20 +118,20 @@ impl AppView {
         } else {
             card_status(config, surface, enabled)
         };
-        let source_line =
-            if surface == Surface::Concentration && config.concentration_shares_premium() {
-                "复用 Premium 区域图源".to_owned()
-            } else {
-                format!(
-                    "{} · {}",
-                    theme::source_label(resolved.source),
-                    theme::fit_label(resolved.image.fit)
-                )
-            };
+        let root = config.binding_root(surface).unwrap_or(surface);
+        let source_line = if root != surface {
+            format!("绑定到 {}", theme::surface_title(root))
+        } else {
+            format!(
+                "{} · {}",
+                theme::source_label(resolved.source),
+                theme::fit_label(resolved.image.fit)
+            )
+        };
         let description = if !enabled {
             "组件未启用，点击打开配置。".to_owned()
         } else if loading {
-            "正在准备下一张图片…".to_owned()
+            "正在准备媒体预览…".to_owned()
         } else if let Some(error) = &error {
             format!("准备失败：{error}")
         } else {
@@ -180,10 +166,8 @@ impl AppView {
                 } else {
                     this.hovered_surface
                 };
-                let global = if *entered { false } else { this.hovered_global };
-                if this.hovered_surface != next || this.hovered_global != global {
+                if this.hovered_surface != next {
                     this.hovered_surface = next;
-                    this.hovered_global = global;
                     cx.notify();
                 }
             }))
@@ -235,75 +219,6 @@ impl AppView {
 
         module.into_any_element()
     }
-
-    fn render_global_module(
-        &mut self,
-        region: Region,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let hovered = self.hovered_global;
-        let dense = region.width < 280. || region.height < 380.;
-        let accent = theme::accent();
-        let glyph_size = (region.width.min(region.height) * 0.34).clamp(72., 140.);
-        let glyph = div()
-            .size(px(glyph_size))
-            .rounded(px(16.))
-            .border_1()
-            .border_color(theme::line_strong())
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                Icon::new(IconName::Settings2)
-                    .with_size(Size::Size(px(44.)))
-                    .text_color(accent),
-            );
-
-        div()
-            .id("global-module")
-            .absolute()
-            .left(px(region.x))
-            .top(px(region.y))
-            .w(px(region.width))
-            .h(px(region.height))
-            .overflow_hidden()
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .on_hover(cx.listener(|this, entered, _, cx| {
-                if this.hovered_global != *entered {
-                    this.hovered_global = *entered;
-                    if *entered {
-                        this.hovered_surface = None;
-                    }
-                    cx.notify();
-                }
-            }))
-            .on_click(cx.listener(|this, _, _, cx| this.go_to_global(cx)))
-            .child(glyph)
-            .when(hovered, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset(px(1.))
-                        .border_1()
-                        .border_color(theme::accent().opacity(0.4)),
-                )
-                .child(info_panel(
-                    IconName::Settings2,
-                    "全局选项",
-                    None,
-                    "来源、下载与输出设置的默认值。",
-                    "iidxbg.toml",
-                    "打开",
-                    accent,
-                    dense,
-                ))
-            })
-            .into_any_element()
-    }
 }
 
 fn grid_lines(width: f32, height: f32, cell_width: f32, top_height: f32) -> AnyElement {
@@ -315,7 +230,19 @@ fn grid_lines(width: f32, height: f32, cell_width: f32, top_height: f32) -> AnyE
                 .top_0()
                 .left(px(column as f32 * cell_width))
                 .w(px(1.))
-                .h(px(height))
+                .h(px(top_height))
+                .bg(theme::line_strong())
+                .into_any_element(),
+        );
+    }
+    for column in 1..3 {
+        lines.push(
+            div()
+                .absolute()
+                .top(px(top_height))
+                .left(px(column as f32 * width / 3.))
+                .w(px(1.))
+                .h(px(height - top_height))
                 .bg(theme::line_strong())
                 .into_any_element(),
         );
@@ -339,18 +266,14 @@ fn grid_lines(width: f32, height: f32, cell_width: f32, top_height: f32) -> AnyE
 }
 
 fn card_status(
-    config: &iidxbg::config::Config,
-    surface: Surface,
+    _config: &iidxbg::config::Config,
+    _surface: Surface,
     enabled: bool,
 ) -> (&'static str, Hsla, Hsla) {
     if enabled {
-        ("启用中", theme::success(), theme::success_soft())
-    } else if config.enabled {
-        ("未启用", theme::muted_ink(), theme::card_bg())
-    } else if store::surface_switch_value(config, surface) {
-        ("等待全局", theme::warning(), theme::warning_soft())
+        ("ON", theme::success(), theme::success_soft())
     } else {
-        ("全局关闭", theme::muted_ink(), theme::card_bg())
+        ("OFF", theme::muted_ink(), theme::card_bg())
     }
 }
 

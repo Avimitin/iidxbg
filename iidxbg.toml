@@ -6,12 +6,17 @@
 # Relative paths start from this file's folder. Use single quotes for Windows
 # paths, for example 'D:\Pictures\IIDX', so backslashes need no escaping.
 
-# false skips image preparation and selects stock artwork for the next visit.
-# Lifecycle hooks stay active so setting true can re-enable without restarting.
+# Legacy master switch/defaults kept for existing files. The UI has no global
+# page: edit each surface independently below. Keep this true for normal use.
 enabled = true
 
-# "local": random image from local_directory.
-# "remote": download from moebooru.domain using moebooru.tags.
+# Legacy result-only video setting. Prefer source = "file" and media_path in
+# [sources.results]. Existing installations still accept this older key.
+results_video = ''
+
+# "file": one PNG/JPEG or local video from media_path.
+# "local": random image/video from local_directory.
+# "remote": download an image from the configured Moebooru-compatible API.
 # "mixed": randomly choose a source; try the other source if it fails.
 source = "local"
 
@@ -93,8 +98,9 @@ frame_chara_image = ''
 # Each enabled surface chooses independently. Settings above are inherited unless
 # overridden below. Decode, blur and downloads all run on the image worker.
 # A saved edit takes effect after the next query, on a new selection visit/chart.
-# Results illustration replacement remains enabled through the top-level switch.
+# Results has its own switch; all seven switches are independent.
 [surfaces]
+results = true
 # Background behind song-selection UI (not the song's gameplay BGA).
 song_select = false
 # Upper lane-cover artwork; native SUDDEN+ visibility and adjustment stay active.
@@ -116,7 +122,21 @@ concentration = false
 # Per-surface overrides are active by default. Edit each background below.
 # Local folders live under iidxbg; download folders under iidxbg/downloads.
 # Omitted fields inherit the top-level settings. Remove a field to inherit it.
-# source: "local", "remote", or "mixed". fit: "cover" or "contain".
+# source: "file", "local", "remote", or "mixed". fit: "cover" or "contain".
+# Fixed file example in any sources section:
+#   source = "file"
+#   media_path = 'D:\Videos\background.mp4'
+# Local videos are silent loops, stretched to the native canvas (max 1920x1080).
+# File/folder video playback: results, song_select, sudden_plus, lift, target_graph.
+# Premium/concentration use the first frame as a static image.
+# Bind example under [sources.sudden_plus]: bind = "lift"
+# Compatible binding groups: results/song_select; sudden_plus/lift/target_graph;
+# premium_area/concentration. Cycles are rejected. The target switch can be off.
+# Bound lane covers and graph share one file, decoder and GPU descriptor.
+# Custom API example under [sources.<name>.moebooru]:
+#   api_url = "https://example.org/post.json"
+#   media_hosts = ["cdn.example.org"]
+# API sources download PNG/JPEG only; an empty api_url uses the built-in domain.
 # Optional recursive overrides subfolder scanning for this surface.
 # Nested moebooru accepts domain, tags, save_directory, page_max,
 # timeout_seconds and max_images. Domain candidates: konachan.net, konachan.com,

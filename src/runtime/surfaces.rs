@@ -1,13 +1,14 @@
 //! Exact-build surface hooks. See docs/*-background-surfaces.md for ABI evidence.
 use super::*;
+use crate::media::{Asset, Playback};
 use minhook::MinHook;
 
 #[derive(Default)]
 pub(super) struct Bundle {
-    select: Option<Arc<Prepared>>,
-    upper: Option<Arc<Prepared>>,
-    lower: Option<Arc<Prepared>>,
-    graph: Option<Arc<Prepared>>,
+    select: Option<Asset>,
+    upper: Option<Asset>,
+    lower: Option<Asset>,
+    graph: Option<Asset>,
     premium_area: Option<Arc<Prepared>>,
     concentration: Option<Arc<Prepared>>,
 }
@@ -16,16 +17,26 @@ static LATEST: Mutex<Option<Arc<Bundle>>> = Mutex::new(None);
 static CHARACTER_IMAGE: Mutex<Option<Arc<Prepared>>> = Mutex::new(None);
 static STATE: Mutex<Surfaces> = Mutex::new(Surfaces::new());
 static HOOKS: OnceLock<Vec<(&'static str, usize)>> = OnceLock::new();
+/// Diagnostic rate limits. The selection round logs every 120 movie draws
+/// (about once a second at 120 Hz); premium transform failures every 600
+/// attempts so a broken premium path cannot fill the log.
+static SELECT_DRAW_TICKS: AtomicU32 = AtomicU32::new(0);
+static SELECT_PROBE_TICKS: AtomicU32 = AtomicU32::new(0);
+static PREMIUM_FAULTS: AtomicU32 = AtomicU32::new(0);
 
 /// Worker publishes already decoded, independently sourced surface canvases.
-pub(super) fn publish(images: &[Option<Arc<Prepared>>; Surface::COUNT]) {
+pub(super) fn publish(images: &[Option<Asset>; Surface::COUNT]) {
     *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Bundle {
         select: images[Surface::SongSelect.index()].clone(),
         upper: images[Surface::SuddenPlus.index()].clone(),
         lower: images[Surface::Lift.index()].clone(),
         graph: images[Surface::TargetGraph.index()].clone(),
-        premium_area: images[Surface::PremiumArea.index()].clone(),
-        concentration: images[Surface::Concentration.index()].clone(),
+        premium_area: images[Surface::PremiumArea.index()]
+            .as_ref()
+            .map(Asset::first),
+        concentration: images[Surface::Concentration.index()]
+            .as_ref()
+            .map(Asset::first),
     }));
 }
 
@@ -182,7 +193,7 @@ impl FrameChara {
         }
     }
 
-    fn released(&mut self, layer: usize) -> Option<Texture> {
+    fn released(&mut self, layer: usize) -> Option<Arc<Texture>> {
         if self.hidden.is_some_and(|saved| saved.layer == layer) {
             self.hidden = None;
         }
@@ -331,12 +342,111 @@ unsafe fn visible(object: usize, enabled: bool) {
 
 struct Sprite {
     node: usize,
-    texture: Option<Texture>,
+    texture: Option<Arc<Texture>>,
+    media: Option<Arc<GpuMedia>>,
+}
+
+/// Weak cache owns no GPU objects. Only the graphics owner creates/uses/drops
+/// these leases; bound surfaces upload once and use one native descriptor.
+static MEDIA: Mutex<Vec<std::sync::Weak<GpuMedia>>> = Mutex::new(Vec::new());
+struct GpuMedia {
+    identity: Arc<Prepared>,
+    texture: Arc<Texture>,
+    playback: Mutex<Playback>,
+    failed: AtomicBool,
+}
+
+impl GpuMedia {
+    unsafe fn acquire(n: &Native, asset: &Asset) -> Result<Arc<Self>> {
+        let identity = asset.first();
+        let mut cache = MEDIA
+            .try_lock()
+            .map_err(|_| Error::Native("media cache busy"))?;
+        cache.retain(|entry| entry.strong_count() != 0);
+        if let Some(shared) = cache
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .find(|entry| Arc::ptr_eq(&entry.identity, &identity))
+        {
+            return Ok(shared);
+        }
+        let playback = asset.play();
+        let texture = Arc::new(unsafe { Texture::upload(n, &playback.pixels) }?);
+        let shared = Arc::new(Self {
+            identity,
+            texture,
+            playback: Mutex::new(playback),
+            failed: AtomicBool::new(false),
+        });
+        cache.push(Arc::downgrade(&shared));
+        Ok(shared)
+    }
+
+    unsafe fn update(&self) -> Result<()> {
+        if self.failed.load(Ordering::Relaxed) {
+            return Err(Error::Native("shared texture unavailable until reset"));
+        }
+        if let Ok(mut playback) = self.playback.try_lock()
+            && playback.update()
+            && let Err(error) = unsafe { self.texture.write_pixels(&playback.pixels) }
+        {
+            self.failed.store(true, Ordering::Relaxed);
+            return Err(error);
+        }
+        Ok(())
+    }
 }
 
 impl Sprite {
     unsafe fn create(n: &Native, image: &Prepared, priority: u32) -> Result<Self> {
-        let texture = unsafe { Texture::upload(n, image) }?;
+        let texture = Arc::new(unsafe { Texture::upload(n, image) }?);
+        unsafe { Self::from_texture(n, texture, priority, None) }
+    }
+
+    unsafe fn media(
+        n: &Native,
+        asset: &Asset,
+        priority: u32,
+        width: f32,
+        height: f32,
+    ) -> Result<Self> {
+        let media = unsafe { GpuMedia::acquire(n, asset) }?;
+        let sprite =
+            unsafe { Self::from_texture(n, media.texture.clone(), priority, Some(media)) }?;
+        let scale: Scale = unsafe { n.function("sprite_scale") };
+        unsafe {
+            scale(
+                sprite.node,
+                width / asset.width as f32,
+                height / asset.height as f32,
+            )
+        };
+        event(Event::Diag(format!(
+            "media sprite priority={priority} descriptor={:p} canvas={}x{}",
+            sprite.texture.as_ref().unwrap().descriptor(),
+            asset.width,
+            asset.height
+        )));
+        Ok(sprite)
+    }
+
+    unsafe fn update(&self) -> bool {
+        let ready = self
+            .media
+            .as_ref()
+            .is_none_or(|media| unsafe { media.update() }.is_ok());
+        if !ready {
+            unsafe { visible(self.node, false) };
+        }
+        ready
+    }
+
+    unsafe fn from_texture(
+        n: &Native,
+        texture: Arc<Texture>,
+        priority: u32,
+        media: Option<Arc<GpuMedia>>,
+    ) -> Result<Self> {
         let manager: Manager = unsafe { n.function("sprite_manager") };
         let create: Factory = unsafe { n.function("sprite_create") };
         let get_group: unsafe extern "system" fn() -> u32 = unsafe {
@@ -358,6 +468,7 @@ impl Sprite {
         Ok(Self {
             node,
             texture: Some(texture),
+            media,
         })
     }
 }
@@ -583,7 +694,7 @@ impl PremiumArea {
             && let Some(texture) = &mut sprite.texture
             && texture.width == image.width
             && texture.height == image.height
-            && unsafe { texture.refresh(n, &image) }.is_ok()
+            && unsafe { texture.write_pixels(&image) }.is_ok()
         {
             self.image = Some(image);
             event(Event::Surface("premium area"));
@@ -608,9 +719,17 @@ impl PremiumArea {
         }
         let handle = unsafe { ((target + 528) as *const u32).read() };
         let Some(transform) = (unsafe { read_transform(n, handle) }) else {
-            event(Event::Fault(
-                "premium area native transform unavailable; using stock",
-            ));
+            // The premium nodes are session-global and this path runs every
+            // movie draw; a single broken transform must not fill the log at
+            // frame rate. Log roughly once every five seconds at 120 Hz.
+            if PREMIUM_FAULTS
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(600)
+            {
+                event(Event::Fault(
+                    "premium area native transform unavailable; using stock",
+                ));
+            }
             return;
         };
         match unsafe { Sprite::create(n, &image, self.priority) } {
@@ -656,7 +775,7 @@ impl PremiumArea {
         }
     }
 
-    unsafe fn released(&mut self, _n: &Native, node: usize) -> Option<Texture> {
+    unsafe fn released(&mut self, _n: &Native, node: usize) -> Option<Arc<Texture>> {
         if let Some(sprite) = &mut self.sprite
             && sprite.node == node
         {
@@ -974,6 +1093,75 @@ impl Concentration {
     }
 }
 
+#[derive(Default)]
+struct SelectBackdrop {
+    hidden: Option<HiddenFrameChara>,
+    sprite: Option<Sprite>,
+    attempted: bool,
+}
+
+impl SelectBackdrop {
+    unsafe fn current(n: &Native, scene: usize) -> Option<(usize, u32)> {
+        let offset = *n.profile.surface_data.get("select_background")?;
+        if pointer_field(scene, 0)? != n.base + n.profile.surface_data["select_vtable"] {
+            return None;
+        }
+        let layer = pointer_field(scene, offset)?;
+        if pointer_field(layer, 0)? != n.base + n.profile.surface_data["layer_vtable"]
+            || pointer_field(layer, 8)? as u32 == 0
+        {
+            return None;
+        }
+        let clip = pointer_field(layer, 528)? as u32;
+        (clip & 0x8000_0000 == 0).then_some((layer, clip))
+    }
+
+    unsafe fn restore(&mut self, n: &Native, scene: usize) {
+        if let Some(sprite) = &self.sprite {
+            unsafe { visible(sprite.node, false) };
+        }
+        if let Some(saved) = self.hidden.take()
+            && saved.scene == scene
+            && unsafe { Self::current(n, scene) } == Some((saved.layer, saved.clip))
+        {
+            unsafe { set_clip_visible(n, saved.clip, saved.visible) };
+        }
+    }
+
+    unsafe fn update(&mut self, n: &Native, scene: usize, asset: Option<&Asset>) {
+        let Some((layer, clip)) = (unsafe { Self::current(n, scene) }) else {
+            return;
+        };
+        let Some(asset) = asset else { return };
+        if !self.attempted {
+            self.attempted = true;
+            let priority = unsafe {
+                ((scene + n.profile.surface_data["select_background_priority"]) as *const u32)
+                    .read()
+            };
+            self.sprite =
+                unsafe { Sprite::media(n, asset, priority.saturating_add(1), 1920., 1080.) }.ok();
+            if self.sprite.is_some() {
+                event(Event::Surface("selection AFP background"));
+            }
+        }
+        if let Some(sprite) = &self.sprite
+            && sprite.node != 0
+            && unsafe { sprite.update() }
+            && let Some(saved) = unsafe { clip_visible(n, clip) }
+            && unsafe { set_clip_visible(n, clip, 0) }
+        {
+            self.hidden = Some(HiddenFrameChara {
+                scene,
+                layer,
+                clip,
+                visible: saved,
+            });
+            unsafe { visible(sprite.node, saved != 0) };
+        }
+    }
+}
+
 struct Surfaces {
     scene: usize,
     select_choice: Option<Arc<Bundle>>,
@@ -983,6 +1171,7 @@ struct Surfaces {
     covers: Vec<Cover>,
     graphs: Vec<Graph>,
     frame_chara: FrameChara,
+    backdrop: SelectBackdrop,
     premium_area: PremiumArea,
     concentration: Concentration,
 }
@@ -997,6 +1186,11 @@ impl Surfaces {
             pairs: Vec::new(),
             covers: Vec::new(),
             graphs: Vec::new(),
+            backdrop: SelectBackdrop {
+                hidden: None,
+                sprite: None,
+                attempted: false,
+            },
             frame_chara: FrameChara {
                 hidden: None,
                 image: None,
@@ -1042,6 +1236,7 @@ impl Surfaces {
             self.concentration.visible = false;
             self.concentration.image = None;
             self.frame_chara = FrameChara::default();
+            self.backdrop = SelectBackdrop::default();
             self.scene = 0;
             // Keep the selection texture: the next visit refreshes it in place
             // instead of creating a new D3D texture. Device loss drops it.
@@ -1054,12 +1249,15 @@ impl Surfaces {
     unsafe fn invalidate(&mut self) {
         if let Some(n) = NATIVE.get() {
             unsafe { self.frame_chara.restore(n, self.scene) };
+            unsafe { self.backdrop.restore(n, self.scene) };
             unsafe { self.premium_area.restore(n) };
             unsafe { self.concentration.release(n) };
         }
         self.frame_chara.sprite = None;
         self.frame_chara.attempted = false;
         self.select_texture = None;
+        self.backdrop.sprite = None;
+        self.backdrop.attempted = false;
         self.select_attempted = false;
         for cover in &mut self.covers {
             cover.upper = None;
@@ -1121,6 +1319,7 @@ pub(super) fn tick_premium() {
 }
 
 fn observe_select(this: usize) {
+    let mut fresh = 0usize;
     boundary(|| {
         let n = NATIVE.get().unwrap();
         let bundle = snapshot();
@@ -1136,7 +1335,13 @@ fn observe_select(this: usize) {
                 s.scene = this;
                 s.select_choice = snapshot();
                 request_images();
+                fresh = this;
             }
+            let choice = s.select_choice.clone();
+            unsafe {
+                s.backdrop
+                    .update(n, this, choice.as_ref().and_then(|b| b.select.as_ref()))
+            };
             unsafe {
                 s.frame_chara
                     .update(n, this, HIDE_FRAME_CHARA.load(Ordering::Acquire))
@@ -1149,6 +1354,160 @@ fn observe_select(this: usize) {
             }
         }
     });
+    // Diagnostics run after the STATE guard is released. Holding it during the
+    // AFP probes made a concurrent device-reset callback see a held lock
+    // (`surface invalidation reentry`) and disable the feature.
+    if fresh != 0
+        && let Some(n) = NATIVE.get()
+    {
+        boundary(|| unsafe { diag_selection(n, fresh) });
+    }
+}
+
+/// Read-only scan of a scene's AFP layer slots and candidate named clips. Used
+/// once per results/selection visit to identify the stock background layer.
+/// Pointers are only dereferenced after a `VirtualQuery` readability check and
+/// a game-image vtable check; named lookups use the game's null-checked helper
+/// on validated CLayer objects.
+pub(super) unsafe fn diag_scene(n: &Native, scene: usize, label: &str) {
+    if !readable(scene) {
+        return;
+    }
+    let layer_vtable = n.base + n.profile.surface_data["layer_vtable"];
+    let dimensions: unsafe extern "system" fn(usize, *mut i32, *mut i32) =
+        unsafe { n.function("layer_dimensions") };
+    let find: FindClip = unsafe { n.function("find_clip") };
+    let names = [
+        "bg",
+        "background",
+        "base",
+        "back",
+        "wall",
+        "wallpaper",
+        "select",
+        "select_bg",
+        "music_sel_bg",
+        "result_bg",
+        "illust",
+        "bg1_clear",
+        "bg1_failed",
+        "header_clear",
+        "main_bg",
+        "black",
+        "cover",
+        "frame_layer1",
+        "frame_layer2",
+        "frame_layer3",
+        "frame_chara",
+        "frame_chara_usr",
+    ];
+    let scene_vtable = pointer_field(scene, 0).unwrap_or(0);
+    event(Event::Diag(format!(
+        "{label} scene scan: scene={scene:#x} vt={scene_vtable:#x}"
+    )));
+    let mut layers = 0u32;
+    for offset in (0..1024).step_by(8) {
+        let Some(value) = pointer_field(scene, offset) else {
+            continue;
+        };
+        if value == 0 {
+            continue;
+        }
+        let Some(vtable) = pointer_field(value, 0) else {
+            continue;
+        };
+        if !(n.base..n.base + n.profile.image_size).contains(&vtable) {
+            continue;
+        }
+        if vtable != layer_vtable {
+            event(Event::Diag(format!(
+                "{label} scene+{offset}={value:#x} vt={vtable:#x}"
+            )));
+            continue;
+        }
+        layers += 1;
+        let (mut width, mut height) = (0, 0);
+        unsafe { dimensions(value, &mut width, &mut height) };
+        let handle = if readable(value.saturating_add(528)) {
+            unsafe { ((value + 528) as *const u32).read() }
+        } else {
+            0
+        };
+        let visible = unsafe { clip_visible(n, handle) };
+        event(Event::Diag(format!(
+            "{label} layer scene+{offset}={value:#x} dims={width}x{height} handle={handle:#x} visible={visible:?}"
+        )));
+        for name in names {
+            let mut c_name = Vec::with_capacity(name.len() + 1);
+            c_name.extend_from_slice(name.as_bytes());
+            c_name.push(0);
+            let clip = unsafe { find(value, c_name.as_ptr()) };
+            if clip == 0 {
+                continue;
+            }
+            let node = if readable(clip.saturating_add(512)) {
+                unsafe { ((clip + 512) as *const u32).read() }
+            } else {
+                0x8000_0000
+            };
+            let visible = unsafe { clip_visible(n, node) };
+            let transform = if node & 0x8000_0000 == 0 {
+                unsafe { read_transform(n, node) }
+            } else {
+                None
+            };
+            event(Event::Diag(format!(
+                "{label} layer scene+{offset} clip '{name}'={clip:#x} node={node:#x} visible={visible:?} transform={}",
+                match transform {
+                    Some(t) => format!(
+                        "pos={:?} origin={:?} scale={:?} color={:?}",
+                        t.position, t.origin, t.scale, t.color
+                    ),
+                    None => "none".to_owned(),
+                }
+            )));
+        }
+    }
+    event(Event::Diag(format!("{label} scene scan: {layers} layers")));
+    if let Some(rva) = n.profile.surface_data.get("clip_pool_count")
+        && readable(n.base.saturating_add(*rva))
+    {
+        let pool = unsafe { ((n.base + rva) as *const u32).read() };
+        event(Event::Diag(format!("{label} scene scan: pool={pool}")));
+    }
+}
+
+unsafe fn diag_selection(n: &Native, scene: usize) {
+    unsafe { diag_scene(n, scene, "selection") };
+}
+
+/// Inspect only the verified background movie after setup. No scene-wide
+/// pointer scanning and no speculative layer suppression.
+pub(super) unsafe fn diag_results(n: &Native, background: usize) {
+    let movie = unsafe { field(background, n.profile.layout.background_movie) };
+    let archive = unsafe { field(background, n.profile.layout.background_archive) };
+    let root = pointer_field(movie, 528).unwrap_or(usize::MAX) as u32;
+    event(Event::Diag(format!(
+        "results initialized: background={background:#x} movie={movie:#x} archive={archive:#x} root={root:#x}"
+    )));
+}
+
+/// Current backbuffer size. Only called from a `movie_draw` diagnostic, never
+/// from a hot path.
+pub(super) unsafe fn render_target_size(n: &Native) -> (u32, u32) {
+    let get: Device = unsafe { n.function("get_device") };
+    let raw = unsafe { get() };
+    let Some(device) = (unsafe { IDirect3DDevice9::from_raw_borrowed(&raw) }) else {
+        return (0, 0);
+    };
+    let Ok(surface) = (unsafe { device.GetRenderTarget(0) }) else {
+        return (0, 0);
+    };
+    let mut description = D3DSURFACE_DESC::default();
+    if unsafe { surface.GetDesc(&mut description) }.is_err() {
+        return (0, 0);
+    }
+    (description.Width, description.Height)
 }
 
 fn restore_frame_chara(scene: usize) {
@@ -1159,6 +1518,7 @@ fn restore_frame_chara(scene: usize) {
             && let Some(mut s) = state()
         {
             unsafe { s.frame_chara.restore(n, scene) };
+            unsafe { s.backdrop.restore(n, scene) };
         }
     });
 }
@@ -1207,6 +1567,9 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
         if s.scene == 0 {
             return;
         }
+        if n.profile.surface_data.contains_key("select_background") {
+            return;
+        }
         if !s.select_attempted {
             s.select_attempted = true;
             if let Some(image) = s.select_choice.as_ref().and_then(|b| b.select.clone()) {
@@ -1231,13 +1594,62 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
                 }
             }
         }
+        let mut alpha = 1.0;
         if let Some(texture) = &s.select_texture {
-            let alpha = if n.profile.surface_data["selection_fade"] != 0 {
+            alpha = if n.profile.surface_data["selection_fade"] != 0 {
                 unsafe { ((this + 40) as *const f32).read() }
             } else {
                 1.0
             };
-            drawn = unsafe { draw_selection(n, texture, alpha) }.is_ok();
+            drawn = unsafe { draw_fullscreen_quad(n, texture, alpha) }.is_ok();
+        }
+        let tick = SELECT_DRAW_TICKS.fetch_add(1, Ordering::Relaxed);
+        if tick.is_multiple_of(120) && readable(this) && readable(this.saturating_add(40)) {
+            let (rt_width, rt_height) = unsafe { render_target_size(n) };
+            let enable = unsafe {
+                [
+                    ((this + 16) as *const u8).read(),
+                    ((this + 36) as *const u8).read(),
+                ]
+            };
+            let rect = unsafe {
+                [
+                    ((this + 20) as *const i32).read(),
+                    ((this + 24) as *const i32).read(),
+                    ((this + 28) as *const i32).read(),
+                    ((this + 32) as *const i32).read(),
+                ]
+            };
+            let native_alpha = unsafe { ((this + 40) as *const f32).read() };
+            event(Event::Diag(format!(
+                "selection draw: scene={:#x} tex={} alpha={alpha:.3} drawn={drawn} rt={rt_width}x{rt_height} native_rect=({},{},{},{}) enable={}/{} native_alpha={native_alpha:.3}",
+                s.scene,
+                s.select_texture.is_some(),
+                rect[0],
+                rect[1],
+                rect[2],
+                rect[3],
+                enable[0],
+                enable[1],
+            )));
+        }
+        // Video feasibility probe for the selection canvas: the real cost of a
+        // full 1920x1080 per-frame refresh on the game device. Rewrites the
+        // same image, so the visible frame is unchanged.
+        if let (Some(texture), Some(image)) = (
+            &s.select_texture,
+            s.select_choice.as_ref().and_then(|b| b.select.as_ref()),
+        ) {
+            let probe_tick = SELECT_PROBE_TICKS.fetch_add(1, Ordering::Relaxed);
+            if probe_tick.is_multiple_of(240)
+                && let Some((lock, copy, unlock)) =
+                    unsafe { Texture::probe_refresh(texture, image) }
+            {
+                event(Event::Diag(format!(
+                    "video probe: selection refresh {}x{} lock={lock}us copy={copy}us unlock={unlock}us",
+                    image.width, image.height
+                )));
+            }
         }
     });
     if drawn { 0 } else { unsafe { f(this) } }
@@ -1254,7 +1666,7 @@ struct Vertex {
     v: f32,
 }
 
-unsafe fn draw_selection(n: &Native, texture: &Texture, alpha: f32) -> Result<()> {
+pub(super) unsafe fn draw_fullscreen_quad(n: &Native, texture: &Texture, alpha: f32) -> Result<()> {
     let device: Device = unsafe { n.function("get_device") };
     let raw = unsafe { device() };
     let device = unsafe { IDirect3DDevice9::from_raw_borrowed(&raw) }
@@ -1365,22 +1777,24 @@ unsafe extern "system" fn cover_build(pair: usize, archive: usize, id: i32, mirr
     });
 }
 
-unsafe fn make_cover(n: &Native, image: &Prepared, info: PairInfo) -> Result<Sprite> {
-    let sprite = unsafe { Sprite::create(n, image, 108) }?;
+unsafe fn make_cover(n: &Native, image: &Asset, info: PairInfo) -> Result<Sprite> {
+    let sprite = unsafe { Sprite::media(n, image, 108, 432., 723.) }?;
     let clip: Clip = unsafe { n.function("sprite_clip") };
     let origin: Position = unsafe { n.function("sprite_origin") };
     let scale: Scale = unsafe { n.function("sprite_scale") };
     unsafe {
         clip(sprite.node, [0, 0, 1920, 723].as_ptr());
         origin(sprite.node, 0, 0);
-        scale(sprite.node, 1.0, 1.0);
+        let sx = 432. / image.width as f32;
+        let sy = 723. / image.height as f32;
+        scale(sprite.node, sx, sy);
         if info.mirror {
-            scale(sprite.node, -1.0, 1.0);
-            origin(sprite.node, 216, 0);
+            scale(sprite.node, -sx, sy);
+            origin(sprite.node, image.width as i32 / 2, 0);
         }
         if info.flip {
-            scale(sprite.node, 1.0, -1.0);
-            origin(sprite.node, 0, 723);
+            scale(sprite.node, sx, -sy);
+            origin(sprite.node, 0, image.height as i32);
         }
     }
     Ok(sprite)
@@ -1441,6 +1855,7 @@ unsafe extern "system" fn cover_visual(this: usize) -> usize {
             if pair != 0
                 && let Some(sprite) = sprite
                 && sprite.node != 0
+                && unsafe { sprite.update() }
             {
                 let old = unsafe { [field(pair, 0), field(pair, 8)] };
                 restore[index] = Some(SavedPointers {
@@ -1513,7 +1928,7 @@ unsafe extern "system" fn graph_art(this: usize) {
         if !g.attempted {
             g.attempted = true;
             if let Some(image) = g.choice.as_ref().and_then(|b| b.graph.as_ref()) {
-                g.sprite = unsafe { Sprite::create(n, image, 145) }.ok();
+                g.sprite = unsafe { Sprite::media(n, image, 145, 432., 870.) }.ok();
                 if let Some(sprite) = &g.sprite {
                     let alpha: Alpha = unsafe { n.function("sprite_alpha") };
                     unsafe { alpha(sprite.node, 1.0, 0.7, 0.7, 0.7) };
@@ -1530,6 +1945,7 @@ unsafe extern "system" fn graph_art(this: usize) {
             frame != 0 && unsafe { marker(frame, c"gr_line_max".as_ptr().cast()) } != 0;
         if let Some(sprite) = &g.sprite
             && sprite.node != 0
+            && unsafe { sprite.update() }
             && has_marker
         {
             let restore = SavedPointers {
@@ -1598,6 +2014,16 @@ unsafe extern "system" fn sprite_release(this: usize) {
     boundary(|| {
         if let Some(mut s) = state() {
             texture = s.frame_chara.released(this);
+            if s.backdrop.hidden.is_some_and(|saved| saved.layer == this) {
+                s.backdrop.hidden = None;
+            }
+            if let Some(sprite) = &mut s.backdrop.sprite
+                && sprite.node == this
+            {
+                sprite.node = 0;
+                texture = sprite.texture.take();
+                s.backdrop.attempted = false;
+            }
             if let Some(n) = NATIVE.get()
                 && let Some(released) = unsafe { s.premium_area.released(n, this) }
             {
@@ -1710,12 +2136,38 @@ unsafe extern "system" fn concentration_show(window: usize, show: u8) -> usize {
     result
 }
 
-/// Native archive/name texture setter. The game uses it to restore its own
-/// customization background; rebind our texture immediately afterwards so the
-/// stock art does not stay on screen until the next show event.
+/// Compare a game-provided NUL-terminated name with a fixed byte string. The
+/// name pointer is validated before every read.
+unsafe fn name_equals(name: *const u8, expected: &[u8]) -> bool {
+    if name.is_null() {
+        return false;
+    }
+    let address = name as usize;
+    if !readable(address) || !readable(address.saturating_add(expected.len())) {
+        return false;
+    }
+    for (index, byte) in expected.iter().enumerate() {
+        if unsafe { name.add(index).read() } != *byte {
+            return false;
+        }
+    }
+    unsafe { name.add(expected.len()).read() == 0 }
+}
+
+/// Native archive/name texture setter.
+///
+/// It captures the exact results `illust` clip from the game's own
+/// `set_archive(clip, archive, "result_bg")` call (the runtime binds the custom
+/// descriptor to that object), and rebinds a concentration texture immediately
+/// after a native customization restore.
+/// Diagnostic: copy a bounded printable C string for logging.
 unsafe extern "system" fn set_archive_hook(clip: usize, archive: usize, name: *const u8) -> u8 {
     let f: SetArchive = unsafe { original("set_archive") };
     let result = unsafe { f(clip, archive, name) };
+    if clip != 0 && archive != 0 && unsafe { name_equals(name, b"result_bg") } {
+        RESULTS_CLIP.store(clip, Ordering::Release);
+        RESULTS_STOCK_REBINDS.fetch_add(1, Ordering::Relaxed);
+    }
     boundary(|| {
         if !CONCENTRATION_ENABLED.load(Ordering::Acquire) || !can_render() {
             return;
@@ -1759,15 +2211,17 @@ pub(super) fn attach(n: &Native) -> Result<()> {
     {
         hooks.push(("premium_area_ctor", premium_area_ctor as *const ()));
     }
+    // Captures the results illustration clip from the game's own archive bind
+    // (all supported profiles have this entry) and restores concentration art.
+    if n.profile.rvas.contains_key("set_archive") {
+        hooks.push(("set_archive", set_archive_hook as *const ()));
+    }
     if n.profile.rvas.contains_key("concentration_apply")
         && n.profile.rvas.contains_key("concentration_show")
         && n.profile.rvas.contains_key("concentration_layer")
     {
         hooks.push(("concentration_apply", concentration_apply as *const ()));
         hooks.push(("concentration_show", concentration_show as *const ()));
-        // Catch the native archive-texture restore that would otherwise flash
-        // stock art while the concentration overlay is visible.
-        hooks.push(("set_archive", set_archive_hook as *const ()));
     }
     let mut created = Vec::new();
     let mut trampolines = Vec::new();

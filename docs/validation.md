@@ -1,5 +1,8 @@
 # Validation record — 2026-10-20
 
+Latest results image/video implementation and live-test details are recorded
+in **Results image/video follow-up — 2026-10-23** at the end of this file.
+
 Scope: Windows x64 standalone plugin, known IIDX 33 / 20260812 and
 IIDX 34 / 20260917 profiles. No running game was used for this initial validation;
 later user-confirmed IIDX 33 results are recorded below.
@@ -688,6 +691,10 @@ pre-pass release):
 2. **Results binds once per visit.** The illustration clip is found, bound and
    centered on the first background callback; later callbacks return after the
    `bound` check instead of repeating `find_clip`/`set_texture`/origin.
+   **Reverted on 2026-10-23:** the native callback rebinds or hides the clip on
+   every frame, so the custom binding was immediately overwritten. The clip is
+   still cached, but the descriptor/origin/visibility are reasserted after every
+   original call (see the last section).
 3. **Character transform caching.** The native transform is still read every
    update, but the AFP setters run only when position/origin/scale/color or the
    layer size changes.
@@ -711,3 +718,312 @@ Release `target/release/iidxbg.dll` SHA-256:
 `7897f84d5ef6c4fe82b185763e4b531176a0980dd160e6ce9182bdc44afd0c1b`.
 This build is on `master` after `v0.2.1`; the tag release does not contain the
 performance pass.
+
+## Results stock override and selection draw order (2026-10-23)
+
+Input: deployed `\\2dx.lan.sh1mar.in\IIDX34\modules\bm2dx.dll`, SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`
+(IIDX 34 / 010-0917). Deployed plugin at analysis time: 4,706,816 bytes,
+SHA-256 `ea6e9a693bdffe53719e395d3b34b7ded6ea80b96cdb3fb22b0bb7a76993d437`
+(not the `dist` artifact). Log: `iidxbg.log` in the deployed `modules` folder.
+
+### User report
+
+Results (结算) and the main/selection screen show stock artwork while
+SUDDEN+/LIFT, the target graph, premium area and concentration still show the
+custom artwork. The log reports successful preparation and upload, e.g.
+`Texture ready: 1920x1080; upload 8988 us` and
+`Custom illustration origin set to (960, 540)`; no `Fault` line appears.
+
+### Results root cause (static proof)
+
+IDA Pro 9.4 on the exact DLL, RVA `0x906eb0` (`StageResultDrawBg` slot 2,
+`background_update`). The decompiled body unconditionally repeats:
+
+```text
+clip = find_named_clip(background + 296, "illust")
+if clip:
+    if background + 272:                 // archive exists
+        set_archive(clip, archive, "result_bg")
+        set_origin(clip, 3, 3)
+    else:
+        set_visible(clip, 0)             // hide
+```
+
+The scene update dispatches component slot 2 every frame. The plugin called the
+original first and then bound its own descriptor only on the first callback
+(`Graphics::bound`), so frame 2's native `set_archive` (or hide) overwrote the
+custom binding and no later callback reasserted it. The 0.2.2 log line remains
+successful because the upload and the one-time bind do succeed.
+
+This is a regression from the 2026-10-22 performance pass ("Results binds once
+per visit"), not a provider or decode failure. The 2026-10-21 IIDX 33 visual
+confirmation predates that optimization.
+
+### Fix (implemented, offline-verified)
+
+`src/runtime.rs` now caches the `illust` clip per visit but re-applies
+`set_texture(descriptor)`, `set_origin_pixels(center)` and `set_visible(1)`
+after **every** original background callback. The texture upload remains once
+per visit; `find_clip` is not repeated. The cached clip is cleared on cleanup,
+destruction and device invalidation.
+
+Verified: 27 tests, clippy with warnings denied, `cargo fmt --all --check` and
+the optimized release build passed. New local DLL: 4,712,960 bytes, SHA-256
+`6c9a0c5e5816d7f689b8f0b4ff5360d9b8baee4350e9f3c7537fff707a09074d`.
+**Not yet tested in-game**; the deployed DLL was not replaced.
+
+### Selection/main-screen diagnosis (not fixed)
+
+The selection replacement is a D3D9 quad drawn from the `movie_draw` hook
+(RVA `0x9362b0`; it forwards to `0x936300`, which draws a textured quad from an
+AFP descriptor). If the enabled-movie check passes, the dispatcher draws a quad
+for the movie manager rectangle; the plugin replaces that call with its own
+full-screen quad and skips the original.
+
+IDA call paths for this build:
+
+- `0x9362b0` is called from `0x8e46e0` (stage draw dispatcher, reached from the
+  PRERENDER stage at `0x8e5cb0`) and from `0x9248f0` (RENDER compositor).
+- The RENDER compositor calls the movie dispatcher before the AFP 2D scene
+  render (`0x328b40`). The PRERENDER call happens even earlier. In both paths the
+  quad is drawn **before** the AFP scene background/UI, which then covers it.
+- This build's selection movie loader is stubbed (recorded in
+  `iidx34-background-surfaces.md`): the stock selection background is an AFP
+  scene element, not the disabled movie. Replacing the movie quad cannot remove
+  it.
+
+Consequently the current selection implementation cannot work on this build by
+draw order alone. A fix needs an AFP-level replacement: either find and rebind
+the selection background layer/clip texture (like concentration), or insert an
+owned low-priority full-screen AFP sprite that covers the stock background
+below the UI. Both require a runtime layer enumeration/log to identify the
+background element and its priority; no such build has been tested in-game yet.
+
+Remaining unknowns: the selection background's node/priority and whether an
+AFP sprite can sit below it; the per-frame AFP `set_texture` cost after the
+results fix; and in-game confirmation of the results reassert on 010-0917
+(clear/failed/full-combo, repeats, device reset).
+
+### Grade-dependent results pipelines — in-game confirmation (2026-10-23)
+
+Historical probe record: the invalid no-archive node conclusion below was
+superseded by the delayed-setup and temporary-wrapper lifetime findings in
+the later **Results image/video follow-up**. The AA display observation remains
+valid; early null/invalid probes did not establish the visible fail hierarchy.
+
+Round on the deployed 010-0917 build (`2b812c22`, results capture + per-frame
+reassert + scene probes). Two deliberate result visits:
+
+| Visit | `archive` (+272) | `illust` node | `game_clip` | `rebinds` | Visual result |
+|---|---|---|---|---|---|
+| Intentional **fail** | `0x0` | `0xffffffee` (invalid) | `0x0` | `0` | stock animated frame; custom image absent |
+| **AA** clear | `0x18c2f0620` | `0x5ec025ff` (valid) | captured | grows every frame | **custom image displayed** (user confirmed) |
+
+This confirms two separate render paths:
+
+- **Fixed illustration path (grades with an archive).** `StageResultDrawBg`
+  loads a grade/result-specific IFS, binds `illust` to `result_bg` on every
+  frame, and gives the clip a valid AFP node. The per-frame reassert (and the
+  `set_archive` capture of the exact clip) is what makes the replacement work
+  here; the earlier "bind once per visit" optimization was the regression.
+- **Animated-frame path (no archive).** The fail page leaves `background+272`
+  at zero; the callback takes its `set_visible(illust, 0)` branch every frame.
+  `find_clip("illust")` returns wrappers whose node is invalid, so no texture
+  binding can have an effect. What is visible is the animated result frame, not
+  the illustration.
+
+Game data supports the split: `result_get_aaa/aa/a/b.ifs` are 75–150 MB fixed
+illustrations, while `result_get_clear/failed.ifs` are ~5 MB and there are no
+`result_get_d/e/f` archives. `StageResultFileNameMaker` maps only
+`failed/clear/aaa/aa/a`; unknown types fall back to `result_get_clear`.
+
+Results scene layout: the scanned `CStageResultScene` has **no direct `CLayer`
+fields** in its first 1024 bytes (0 layers logged), unlike the selection scene
+(23 layers at scene+224..+848). The fail page's animated frame therefore lives
+inside the 14 result-draw components at scene+16088 (or their child movie
+clips). The next probe logs the `illust`/`bg1_failed`/`header_*` clips of
+`background+296` and each component's child pointers.
+
+### Video feasibility probe on the real device (2026-10-23)
+
+The same build rewrote an existing 1920x1080 texture once per second on the game
+thread and timed the three phases (content unchanged):
+
+```text
+selection: lock 7–9 us   copy 516–809 us   unlock 9–23 us
+results:   lock 9–12 us  copy 551–902 us   unlock 10–16 us
+```
+
+First-use outliers (8.1 ms copy on the first selection probe, 28.8 ms lock on
+the first results probe) are cold-state effects; steady-state refresh is
+**~0.6–0.8 ms per 1080p frame**. At 60 fps that is 4–5% of a 16.7 ms frame, so
+per-frame 1080p video upload is viable on the CPU path. Combined with the
+Media Foundation hardware-decode measurement (178 fps at 1080p), the remaining
+work for video is finding the correct AFP layer for each surface, not upload
+bandwidth.
+
+## Results image/video follow-up — 2026-10-23
+
+Exact game input: `modules/bm2dx.dll`, 18,200,216 bytes, SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`.
+Its on-disk hash was rechecked unchanged after deployment. IIDX33 was not
+launched or modified. Native RVAs, ABI and temporary-wrapper lifetime evidence
+are in [the build analysis](iidx34-010-0917-analysis.md#results-follow-up-2026-10-23).
+
+Actual in-game testing **was performed**, using Spice API input/capture against
+the user's IIDX34 process. Guest Standard limits the first stage to level 8,
+so Aegis HYPER 8 was used for a quick no-input fail (50 POOR, F, score 0).
+The corrected current-update `illust` lookup displayed a full background image
+with title, difficulty, graph, clear type and judgments intact. Evidence:
+local `target/failed-image-fixed.jpg`. Earlier A/AA/AAA image confirmation is
+user-reported; these grades were not newly played during this follow-up.
+
+The requested source MP4 is HEVC Main, 1728x1080, 30 fps, 36.43 seconds,
+3,516,119 bytes, SHA-256
+`6fe1819e7d715ac0778fac0499eb1fb0d150bc979ad380468a8df920cba267f8`.
+Media Foundation on the game machine rejected it with `0xC00D5212` (decoder
+not available). The original was preserved. FFmpeg 7.1 converted a separate
+copy with `-an -c:v libx264 -pix_fmt yuv420p -crf 20 -preset fast
+-movflags +faststart`; deployed as
+`modules/iidxbg/videos/result-test-h264.mp4`, SHA-256
+`a392754be2c9eee5e38b20d1ee98e81c2ee4c4d03e2a43cf3df99fb0887b9f54`.
+The configured top-level value is
+`results_video = 'iidxbg/videos/result-test-h264.mp4'`.
+The original configuration was saved locally as
+`target/iidxbg-remote-before-video.toml`.
+
+An initial live video build displayed moving content behind the failed-result
+UI but vertically inverted. It incorrectly used the media type default stride
+for the processor's actual 2D surface. The corrected decoder uses
+`IMF2DBuffer2::Lock2DSize` scanline zero, signed pitch and allocation bounds;
+only non-2D buffers use the contiguous-layout fallback. A real H.264 color
+fixture now verifies red at the top and blue at the bottom after scaling.
+
+The final deployed build was tested again on `朱と碧のランページ`, NORMAL 5,
+guest Standard SP, FAILED/F, 50 POOR and score zero. It displayed the converted
+video upright behind the result components. Sixteen API screenshots at
+three-second intervals span 45 seconds: `target/video-final-00.jpg` through
+`target/video-final-15.jpg`. Frame 12 returns to the same part of the clip as
+frame 00 after approximately 36 seconds, while intervening captures show later
+content: live motion and an EOF loop are confirmed. Score/judgment panels and
+song/difficulty labels are visible (the native UI also animates during the
+visit). No decoder or texture-refresh error appeared in the final-run log.
+The game was left on this result with video enabled for user inspection.
+
+Verification completed:
+
+- Plugin: 31 ordinary tests passed; both opt-in real Media Foundation tests
+  explicitly passed (orientation, and two 12-second visits spanning a 10-second
+  fixture's EOF with more than 300 delivered frames each).
+- Configuration UI: 10 tests passed, including Unicode Windows video-path
+  save/reload and clearing the path. Clippy passed for plugin and UI with
+  warnings denied; both optimized release builds passed.
+- Native/surface exact-build verifiers passed; origin helper emulation passed
+  for 1920x1080, 1280x720 and fractional centers. DLL load/SDK smoke test passed.
+- Deployed plugin SHA-256:
+  `2cb3efe42dda2d7b0383175a37efe67186ed269754ff2f806cd4955891da3c54`.
+  The game log confirms this hash, exact-build attachment and preservation of
+  the existing 2dx-gsm cleanup hook chain.
+- Deployed configuration app SHA-256:
+  `f52c07f1a77f1f10b218dfdbeaae66b7307ad54dedd5ccb6205e427390422ac5`.
+  The GUI exposes a file chooser at 全局选项 → 结算视频; its image previews remain
+  fallback-image previews. UI rendering/file-dialog clicks were not manually tested.
+
+Reproduction: use the exact game DLL and current plugin, configure a supported
+local MP4 before the result visit, wait for `Prepared results video:...`, then
+enter an ordinary per-song result. The initialized movie at background +296
+must be nonzero before interpreting its node. For images, clear `results_video`
+and allow preparation before the next visit. An active visit retains its chosen
+asset even if configuration or preparation changes.
+
+Remaining coverage: clear below A, fresh A/AA/AAA video runs, DP, Premium Free,
+course results, device-loss/reset stress and frame-time tails have not been
+verified live. Gameplay BGA and other animation surfaces are not implemented
+by this video player. Video is silent and depends on installed Windows codecs;
+H.264 MP4 is the tested format, not a promise of every arbitrary codec.
+
+## Shared video surfaces and single-page UI — 2026-10-23
+
+This follow-up supersedes the results-only configuration and UI described above.
+Exact game input remains SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`.
+The final DLL is `34a1129e85644e7b0adfba5a2d27d26a77a1d8372c5247709ba2cc1a9d93eb3f`.
+Final deployed UI SHA-256:
+`e5a4a5d7befd0136e50097f580283d092889137c2ec6a26c65296d5e5d194ec5`.
+Package `dist/iidxbg-media-surfaces-windows-x64.zip` (12,957,279 bytes) SHA-256:
+`f33fcb321781f848dd62593a4b7aac7f250dbe88df7f48ba08cda4f20e1c57e4`.
+The game log confirms final-build attachment, preserved 2dx-gsm cleanup chaining,
+and preparation of the user's H.264 clip for results, selection and LIFT.
+The disk game DLL hash was checked unchanged; IIDX33 was left untouched.
+
+Actual in-game testing **was performed** on guest Standard SP:
+
+- Song selection played the user's clip behind the song list, radar and native
+  character. Evidence: `target/live-select-video-a.jpg` and `-b.jpg`.
+- Caramel Pain ANOTHER 8 displayed advancing video behind the target graph,
+  preserving native bars, markers and text. Evidence:
+  `target/live-play-video-a.jpg` and `-b.jpg`.
+- With native LIFT&SUDDEN+ and pacemaker enabled, a diagnostic H.264 pattern
+  appeared on both covers and the graph. The LIFT timecode advanced from
+  0.100/frame 3 to 4.367/frame 131. Evidence:
+  `target/live-covers-pattern-a.jpg` and `-b.jpg`.
+- All three gameplay sprites logged the same descriptor `0xb666f5e8`, at
+  priorities 108, 108 and 145, with one 432x723 source canvas. An earlier user
+  clip visit likewise shared descriptor `0xb6adf288`. This establishes actual
+  shared GPU storage in addition to the unit-tested shared decoder/session.
+- Repeated FAILED/F result visits still displayed moving video after the
+  shared-session refactor. A/AA/AAA video uses the same refreshed illustration
+  texture but remains **not separately verified live**; previous image success
+  for those grades was user-reported.
+
+The deployed config uses per-surface `source = "file"` and `media_path`, with
+SUDDEN+ and target graph bound to LIFT. Results is independent. The diagnostic
+pattern was replaced with the user's H.264 clip after testing. Original config
+backup: `target/iidxbg-before-surfaces.toml`. Remote rollback files include
+`iidxbg.before-surfaces.bak` and `iidxbg-config.before-surfaces.exe`.
+
+Verification: 36 native tests, 11 UI tests, and two explicitly enabled real
+Media Foundation tests passed (49 total). Both crates passed clippy with
+warnings denied and optimized release builds. Exact-build native verification
+passed. The final DLL was restarted successfully through Spice and reached
+attract/demo mode. The configuration app was opened locally and its sidebar-free
+gallery and SUDDEN+ source/binding editor visually checked; native file-picker
+interaction was not exercised. Preview video is a first-frame image.
+
+Premium/concentration still use only a video's first frame. Live DP/player-2,
+other game hashes, induced device loss, high-grade video and frame-time tails
+remain untested. Video is silent, loops, stretches to its surface canvas, and
+requires a codec supported by Windows Media Foundation. Detailed ABI, lifetime,
+RVAs and reproduction are recorded in the build analysis and architecture docs.
+
+## Configuration preview codec error — 2026-10-23
+
+The locally running configuration app selected the original HEVC download under
+`sources.lift.media_path`. Reproduction through the Media Foundation reader
+returned HRESULT `0xC00D5212`, with the localized text
+“未找到合适的转换来编码或解码内容。” The original file's SHA-256 remains
+`6fe1819e7d715ac0778fac0499eb1fb0d150bc979ad380468a8df920cba267f8`.
+The existing H.264 conversion (SHA-256
+`a392754be2c9eee5e38b20d1ee98e81c2ee4c4d03e2a43cf3df99fb0887b9f54`)
+decoded successfully at both 1920x1080 and LIFT's 432x723. It was copied to
+the user's Downloads folder as `iidxbg-background-h264.mp4`; the local LIFT
+selection now points there. Original video retained, configuration backed up
+to `target/config-before-codec-fix.toml`.
+
+MF errors now always retain their numeric HRESULT. The UI recognizes the
+missing-codec HRESULT independently of Windows language and recommends an H.264
+conversion or a suitable Windows decoder, explicitly distinguishing conversion
+from renaming. This does not add HEVC support or silently transcode files.
+No game hook, RVA, ABI, texture lifetime or game file changed for this correction;
+no additional in-game testing was performed for this preview-only issue.
+
+Verification: the reopened release UI visibly displayed the converted clip's
+first frame in both LIFT and its bound SUDDEN+ tile (`target/codec-ui-fixed.png`).
+12 UI tests and 36 native tests passed; two optional MF tests were not rerun.
+Native default-config tests were run against the packaged template, with the
+user's edited local configuration restored afterward. Both clippy checks and
+release builds passed. Updated local/remote configuration app SHA-256:
+`871a1a435c5036b6fc6df3261ddcdf9f5966e57cac2aecbe6c48ec08757ce747`.
+The game was not restarted for this fix. Updated binaries and the clean template
+are packaged in `dist/iidxbg-codec-fix-windows-x64.zip`.

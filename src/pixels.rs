@@ -5,7 +5,7 @@ use crate::{
 use image::{DynamicImage, ImageFormat, ImageReader, RgbaImage, imageops};
 use std::io::{Cursor, Read};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Prepared {
     pub label: String,
     pub width: u32,

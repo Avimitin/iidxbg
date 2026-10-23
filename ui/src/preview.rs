@@ -21,6 +21,9 @@ pub struct PreviewFingerprint {
     pub enabled: bool,
     pub target: Surface,
     pub source: Source,
+    pub media_path: PathBuf,
+    pub api_url: String,
+    pub media_hosts: Vec<String>,
     pub local_directory: PathBuf,
     pub recursive: bool,
     pub fit: Fit,
@@ -42,6 +45,9 @@ impl PreviewFingerprint {
     pub fn same_source(&self, other: &Self) -> bool {
         self.target == other.target
             && self.source == other.source
+            && self.media_path == other.media_path
+            && self.api_url == other.api_url
+            && self.media_hosts == other.media_hosts
             && self.local_directory == other.local_directory
             && self.recursive == other.recursive
             && self.fit == other.fit
@@ -69,17 +75,9 @@ pub struct PreviewSpec {
 pub fn specs(config: &Config) -> [PreviewSpec; Surface::COUNT] {
     std::array::from_fn(|index| {
         let surface = Surface::ALL[index];
-        let target = if surface == Surface::Concentration && config.concentration_shares_premium() {
-            Surface::PremiumArea
-        } else {
-            surface
-        };
+        let target = config.binding_root(surface).unwrap_or(surface);
         let resolved = config.for_surface(target);
-        let enabled = config.enabled
-            && match surface {
-                Surface::Results => true,
-                other => super::store::surface_switch_value(config, other),
-            };
+        let enabled = config.surface_enabled(surface);
         PreviewSpec {
             surface,
             target,
@@ -88,6 +86,9 @@ pub fn specs(config: &Config) -> [PreviewSpec; Surface::COUNT] {
                 enabled,
                 target,
                 source: resolved.source,
+                media_path: resolved.media_path,
+                api_url: resolved.moebooru.api_url,
+                media_hosts: resolved.moebooru.media_hosts,
                 local_directory: resolved.local_directory,
                 recursive: resolved.recursive,
                 fit: resolved.image.fit,
@@ -167,6 +168,10 @@ fn describe(error: &iidxbg::Error) -> String {
         iidxbg::Error::Io(error) => format!("读取失败：{error}"),
         iidxbg::Error::Config(message) => format!("配置无效：{message}"),
         iidxbg::Error::Url => "图源返回了不受支持的图片地址".into(),
+        iidxbg::Error::Video(message) if message.contains("0xC00D5212") => {
+            "Windows 缺少此视频所需的解码器（0xC00D5212）。请先将视频转换为 H.264 / AVC MP4，再选择转换后的文件；HEVC / H.265 视频需要额外的 Windows 解码器。修改文件名或扩展名不能转换编码。".into()
+        }
+        iidxbg::Error::Video(message) => format!("视频预览失败：{message}"),
         other => other.to_string(),
     }
 }
@@ -218,6 +223,17 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = include_str!("testdata/minimal.toml");
+
+    #[test]
+    fn missing_decoder_explains_conversion_for_localized_windows_errors() {
+        let error = iidxbg::Error::Video("未找到合适的转换 (0xC00D5212)".into());
+        let message = describe(&error);
+        assert!(message.contains("H.264 / AVC MP4"));
+        assert!(message.contains("Windows 解码器"));
+        assert!(message.contains("修改文件名或扩展名不能转换编码"));
+        let unrelated = iidxbg::Error::Video("bad timestamp".into());
+        assert_eq!(describe(&unrelated), "视频预览失败：bad timestamp");
+    }
 
     #[test]
     fn render_image_keeps_bgra_bytes_for_gpui() {

@@ -54,7 +54,9 @@ See [IIDX 33 evidence](iidx33-analysis.md),
 [IIDX 34 / 010-0917 evidence](iidx34-010-0917-analysis.md). Static compatibility
 does not establish in-game stability. The user confirmed IIDX 33 image display
 and corrected placement; broader lifecycle testing remains. Both IIDX 34 builds
-have only offline validation.
+were initially validated offline. The 010-0917 build now also has live failed/F
+result image and looping-video validation; see its analysis and the dated
+validation follow-up. A/AA/AAA image display was previously user-confirmed.
 
 ## Additional surface adapters
 
@@ -91,9 +93,15 @@ The `0.2.1` performance pass tightened both sides of that pipeline:
   textures stay alive between visits and device loss drops them; concentration
   updates its bound textures in place while the overlay stays bound and
   re-creates them on the next show after a release.
-- The results illustration binds its clip once per visit (`Graphics::bound`)
-  instead of re-running `find_clip`/`set_texture`/origin on every background
-  callback.
+- The results illustration obtains a fresh `illust` wrapper each update and re-applies the
+  custom descriptor, pixel origin and visibility after **every** original
+  background callback. The native callback rebinds the stock archive texture
+  (or hides the clip) on each frame, so a once-per-visit bind is overwritten
+  immediately. AFP temporary wrappers are recycled by the main update; they
+  must never be cached across updates. The archive setter supplies the current
+  wrapper on the archive path; the no-archive path performs a fresh lookup once
+  the delayed background setup has created its movie. Images upload once per
+  visit; video refreshes the same dynamic texture only when a CPU frame is due.
 - The selection character still reads the native transform every update, but
   skips the AFP setters while the values are unchanged (`FramePlacement`).
 - A newer scene request aborts the current worker batch between surfaces and is
@@ -147,3 +155,33 @@ and root ID. No stale scene is dereferenced. A failed geometry read/upload keeps
 stock art. There are no additional detours; the dimension helper gains an exact
 entry guard. Runtime uses imported AFP property functions, not AFP internal RVAs.
 See [33 evidence](iidx33-frame-chara.md) and [34 evidence](iidx34-frame-chara.md).
+
+
+## Media sources and bindings (2026-10-23)
+
+The UI now exposes independent surface settings on a single page. `source =
+"file"` with `media_path` selects an image or video; `local` randomly chooses from
+an image/video folder. Remote and mixed providers accept a custom Moebooru
+`api_url`, with explicit `media_hosts` for CDN downloads. Only images are fetched
+from APIs. Existing top-level defaults and `results_video` remain compatible.
+
+`Config::binding_root` validates a bounded, acyclic graph. Results/selection,
+cover/graph, and premium/concentration are separate compatible groups. Enabling a
+consumer does not enable its source surface. The worker prepares each needed root
+once, publishing the same `Asset` to its consumers. Selection remains frozen at
+visit/owner entry; later completion waits for another visit. Fixed-file caching
+keys path, file size and modification time; provider IO stays on the worker.
+
+A video asset holds a weak session lease. Active consumers share the session clock
+and latest owned CPU frame; the last lease stops decoding. The graphics-owner weak
+GPU cache maps that asset identity to one `GpuMedia` texture and descriptor. Bound
+SUDDEN+/LIFT/graph sprites have separate native geometry but share uploads. Each
+frame is uploaded only when its Arc changes. Reset releases the sprites before
+the shared texture and rebuilds from the frozen choice. Results use the same CPU
+session in their existing illustration adapter. Premium/concentration currently
+consume the first frame as a static image; the UI states this limitation.
+
+The exact 010-0917 selection adapter masks the verified frame_layer2 root only
+while a replacement AFP sprite is valid. Native visibility is restored before
+original update/cleanup, and native release observations invalidate cached owner
+identities. Original movie rendering still runs. See the dated build analysis.

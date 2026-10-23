@@ -3,7 +3,6 @@
 mod app;
 mod editor;
 mod gallery;
-mod global;
 mod preview;
 mod store;
 mod theme;

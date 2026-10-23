@@ -54,16 +54,13 @@ impl ConfigStore {
         &self.config
     }
 
+    #[cfg(test)]
     pub fn saved_at(&self) -> Option<SystemTime> {
         self.saved_at
     }
 
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
-    }
-
-    pub fn has_draft_error(&self) -> bool {
-        self.error.is_some()
     }
 
     /// Apply a format-preserving edit and write it if the whole document is
@@ -182,6 +179,24 @@ pub fn set_string(doc: &mut DocumentMut, path: &[&str], value: &str) {
     set_value(doc, path, string_value(value));
 }
 
+pub fn set_strings(doc: &mut DocumentMut, path: &[&str], values: &[String]) {
+    let array = values
+        .iter()
+        .map(|value| value.as_str())
+        .collect::<toml_edit::Array>();
+    set_value(doc, path, Value::Array(array));
+}
+
+pub fn set_surface_enabled(doc: &mut DocumentMut, surface: Surface, enabled: bool) {
+    if enabled && doc.get("enabled").and_then(Item::as_bool) == Some(false) {
+        for other in Surface::ALL {
+            set_bool(doc, &["surfaces", other.name()], false);
+        }
+        set_bool(doc, &["enabled"], true);
+    }
+    set_bool(doc, &["surfaces", surface.name()], enabled);
+}
+
 /// Keep Windows paths readable by writing literal single-quoted strings when
 /// the value contains backslashes. Otherwise use the standard quoted form.
 fn string_value(value: &str) -> Value {
@@ -199,16 +214,14 @@ pub fn set_u64(doc: &mut DocumentMut, path: &[&str], value: u64) {
     set_value(doc, path, Value::from(value as i64));
 }
 
-pub fn set_usize(doc: &mut DocumentMut, path: &[&str], value: usize) {
-    set_value(doc, path, Value::from(value as i64));
-}
-
+#[cfg(test)]
 pub fn set_u32(doc: &mut DocumentMut, path: &[&str], value: u32) {
     set_value(doc, path, Value::from(i64::from(value)));
 }
 
 pub fn source_key(source: Source) -> &'static str {
     match source {
+        Source::File => "file",
         Source::Local => "local",
         Source::Remote => "remote",
         Source::Mixed => "mixed",
@@ -232,7 +245,7 @@ pub fn domain_key(domain: MoebooruDomain) -> &'static str {
 
 pub fn surface_switch_value(config: &Config, surface: Surface) -> bool {
     match surface {
-        Surface::Results => config.enabled,
+        Surface::Results => config.surfaces.results,
         Surface::SongSelect => config.surfaces.song_select,
         Surface::SuddenPlus => config.surfaces.sudden_plus,
         Surface::Lift => config.surfaces.lift,
@@ -265,6 +278,41 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const FIXTURE: &str = include_str!("testdata/minimal.toml");
+
+    #[test]
+    fn binding_cycles_never_reach_disk_and_results_switch_is_independent() {
+        let (dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        assert!(store.edit(|doc| {
+            set_surface_enabled(doc, Surface::Lift, true);
+            set_surface_enabled(doc, Surface::Results, false);
+            set_string(doc, &["sources", "sudden_plus", "bind"], "lift");
+            set_string(doc, &["sources", "lift", "source"], "file");
+            set_string(
+                doc,
+                &["sources", "lift", "media_path"],
+                r"D:\Videos\test.mp4",
+            );
+        }));
+        assert!(store.config().surface_enabled(Surface::Lift));
+        assert!(!store.config().surface_enabled(Surface::Results));
+        assert_eq!(
+            store.config().binding_root(Surface::SuddenPlus).unwrap(),
+            Surface::Lift
+        );
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!store.edit(|doc| set_string(doc, &["sources", "lift", "bind"], "sudden_plus")));
+        assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+        assert!(store.reload());
+        assert!(store.edit(|doc| {
+            set_bool(doc, &["enabled"], false);
+            set_surface_enabled(doc, Surface::SongSelect, true);
+        }));
+        assert!(store.config().surface_enabled(Surface::SongSelect));
+        assert!(!store.config().surface_enabled(Surface::Lift));
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
 
     fn fixture_path() -> (PathBuf, PathBuf) {
         let nanos = SystemTime::now()
@@ -403,6 +451,20 @@ mod tests {
             store.config().local_directory,
             Path::new(r"D:\Pictures\IIDX")
         );
+        assert!(store.edit(|doc| {
+            set_string(doc, &["results_video"], r"D:\Videos\结算.mp4");
+        }));
+        assert_eq!(
+            store.config().results_video,
+            Path::new(r"D:\Videos\结算.mp4")
+        );
+        assert!(store.reload());
+        assert_eq!(
+            store.config().results_video,
+            Path::new(r"D:\Videos\结算.mp4")
+        );
+        assert!(store.edit(|doc| set_string(doc, &["results_video"], "")));
+        assert!(store.config().results_video.as_os_str().is_empty());
 
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();

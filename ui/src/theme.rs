@@ -4,37 +4,6 @@ use gpui_kit::component::{Theme, ThemeMode, scroll::ScrollbarMode};
 use gpui_kit::*;
 use iidxbg::config::{Config, Surface};
 
-#[derive(Clone, Copy, Debug)]
-pub struct LayoutMetrics {
-    pub sidebar: f32,
-    pub padding: f32,
-    pub compact: bool,
-}
-
-/// The sidebar is an icon rail, not a text panel. Keeping one fixed width
-/// leaves the component canvas predictable at every window size.
-pub fn layout_metrics(viewport_width: f32) -> LayoutMetrics {
-    if viewport_width >= 1280. {
-        LayoutMetrics {
-            sidebar: 64.,
-            padding: 32.,
-            compact: false,
-        }
-    } else if viewport_width >= 900. {
-        LayoutMetrics {
-            sidebar: 64.,
-            padding: 28.,
-            compact: false,
-        }
-    } else {
-        LayoutMetrics {
-            sidebar: 60.,
-            padding: 20.,
-            compact: true,
-        }
-    }
-}
-
 pub fn install(cx: &mut App) {
     Theme::update(cx, |theme| {
         theme.mode = ThemeMode::Dark;
@@ -103,10 +72,6 @@ pub fn ink() -> Hsla {
     rgb(0xf0f0f0).into()
 }
 
-pub fn ink_soft() -> Hsla {
-    rgb(0xc4c4c4).into()
-}
-
 pub fn muted_ink() -> Hsla {
     rgb(0x8c8c8c).into()
 }
@@ -131,10 +96,6 @@ pub fn accent() -> Hsla {
     rgb(0x5fe08e).into()
 }
 
-pub fn accent_hover() -> Hsla {
-    rgb(0x7af0a4).into()
-}
-
 /// Secondary panels are outlined, never tinted. Keeping these helpers
 /// transparent lets callers opt into a border without painting a green wash.
 pub fn accent_soft() -> Hsla {
@@ -146,14 +107,6 @@ pub fn success() -> Hsla {
 }
 
 pub fn success_soft() -> Hsla {
-    rgba(0x00000000).into()
-}
-
-pub fn warning() -> Hsla {
-    rgb(0xd9b45f).into()
-}
-
-pub fn warning_soft() -> Hsla {
     rgba(0x00000000).into()
 }
 
@@ -232,6 +185,7 @@ pub fn surface_size(config: &Config, surface: Surface) -> (u32, u32) {
 
 pub fn source_label(source: iidxbg::config::Source) -> &'static str {
     match source {
+        iidxbg::config::Source::File => "Fixed file",
         iidxbg::config::Source::Local => "本地",
         iidxbg::config::Source::Remote => "远程",
         iidxbg::config::Source::Mixed => "混合",
@@ -243,32 +197,4 @@ pub fn fit_label(fit: iidxbg::config::Fit) -> &'static str {
         iidxbg::config::Fit::Cover => "裁切填充",
         iidxbg::config::Fit::Contain => "完整显示",
     }
-}
-
-pub fn domain_label(domain: iidxbg::config::MoebooruDomain) -> &'static str {
-    match domain {
-        iidxbg::config::MoebooruDomain::Net => "Konachan.net",
-        iidxbg::config::MoebooruDomain::Com => "Konachan.com",
-        iidxbg::config::MoebooruDomain::Yandere => "Yande.re",
-    }
-}
-
-pub fn format_dimensions(config: &Config, surface: Surface) -> String {
-    let (width, height) = surface_size(config, surface);
-    format!("{width} × {height}")
-}
-
-pub fn ratio_label(config: &Config, surface: Surface) -> String {
-    let (width, height) = surface_size(config, surface);
-    let divisor = gcd(width, height);
-    format!("{}:{}", width / divisor, height / divisor)
-}
-
-fn gcd(mut a: u32, mut b: u32) -> u32 {
-    while b != 0 {
-        let remainder = a % b;
-        a = b;
-        b = remainder;
-    }
-    a.max(1)
 }

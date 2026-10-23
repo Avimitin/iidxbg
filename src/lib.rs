@@ -1,10 +1,12 @@
 pub mod character;
 pub mod config;
 pub mod hook_chain;
+pub mod media;
 pub mod pixels;
 pub mod profile;
 pub mod source;
 pub mod state;
+pub mod video;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod runtime;
@@ -53,6 +55,8 @@ pub enum Error {
     },
     #[error("Native/graphics operation failed: {0}")]
     Native(&'static str),
+    #[error("Video: {0}")]
+    Video(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

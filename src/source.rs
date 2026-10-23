@@ -1,6 +1,7 @@
 use crate::{
     Error, Result,
     config::{Config, MoebooruDomain, Source, Surface},
+    media::Asset,
     pixels::{self, Prepared},
 };
 use reqwest::{Url, blocking::Client, redirect::Policy};
@@ -10,6 +11,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -39,6 +41,7 @@ pub struct Provider {
     /// Non-recursive local listings are reused while the directory mtime is
     /// unchanged, so repeated scene requests do not rescan the same folder.
     scan: Option<ScanCache>,
+    media_cache: Option<(PathBuf, SystemTime, u64, Asset)>,
 }
 
 struct ScanCache {
@@ -99,6 +102,10 @@ impl Providers {
         self.providers[surface.index()].prepare()
     }
 
+    pub fn prepare_media(&mut self, surface: Surface) -> Result<Asset> {
+        self.providers[surface.index()].prepare_media()
+    }
+
     pub fn cleanup(&self, surface: Surface) -> Result<usize> {
         let provider = &self.providers[surface.index()];
         if !provider.enabled() {
@@ -117,7 +124,7 @@ impl Provider {
     }
 
     pub fn new(config: Config) -> Result<Self> {
-        let domain = config.moebooru.domain;
+        let policy = config.moebooru.clone();
         let client = Client::builder()
             .user_agent(concat!(
                 "iidxbg/",
@@ -126,9 +133,9 @@ impl Provider {
             ))
             .timeout(Duration::from_secs(config.moebooru.timeout_seconds))
             .connect_timeout(Duration::from_secs(5))
-            .https_only(true)
+            .https_only(!config.moebooru.posts_url().starts_with("http://"))
             .redirect(Policy::custom(move |attempt| {
-                if attempt.previous().len() >= 3 || !allowed_url(domain, attempt.url()) {
+                if attempt.previous().len() >= 3 || !policy.allows_url(attempt.url()) {
                     attempt.error("unsupported redirect")
                 } else {
                     attempt.follow()
@@ -140,6 +147,7 @@ impl Provider {
             client,
             previous: None,
             scan: None,
+            media_cache: None,
         })
     }
 
@@ -161,31 +169,76 @@ impl Provider {
     }
 
     pub fn prepare(&mut self) -> Result<Prepared> {
+        self.prepare_media().map(|asset| (*asset.first()).clone())
+    }
+
+    pub fn prepare_media(&mut self) -> Result<Asset> {
         let result = match self.config.source {
+            Source::File => self.load_media(&self.config.media_path.clone()),
             Source::Local => self.local(),
-            Source::Remote => self.remote(),
-            Source::Mixed if fastrand::bool() => self.remote().or_else(|_| self.local()),
-            Source::Mixed => self.local().or_else(|_| self.remote()),
+            Source::Remote => self.remote().map(|p| Asset::Image(Arc::new(p))),
+            Source::Mixed if fastrand::bool() => self
+                .remote()
+                .map(|p| Asset::Image(Arc::new(p)))
+                .or_else(|_| self.local()),
+            Source::Mixed => self
+                .local()
+                .or_else(|_| self.remote().map(|p| Asset::Image(Arc::new(p)))),
         }?;
         self.previous = Some(result.label.clone());
         Ok(result)
     }
 
-    fn local(&mut self) -> Result<Prepared> {
+    fn load_media(&mut self, path: &Path) -> Result<Asset> {
+        let meta = fs::metadata(path)?;
+        let modified = meta.modified()?;
+        if let Some((cached, stamp, len, asset)) = &self.media_cache
+            && cached == path
+            && *stamp == modified
+            && *len == meta.len()
+            && !matches!(asset, Asset::Video(v) if v.failed())
+        {
+            return Ok(asset.clone());
+        }
+        let asset = if crate::media::is_video(path) {
+            #[cfg(windows)]
+            {
+                Asset::Video(crate::video::load(
+                    path,
+                    self.config.image.width,
+                    self.config.image.height,
+                )?)
+            }
+            #[cfg(not(windows))]
+            {
+                return Err(Error::Video(
+                    "local video requires Windows Media Foundation".into(),
+                ));
+            }
+        } else {
+            let bytes = pixels::read_bounded(fs::File::open(path)?, self.config.byte_limit())?;
+            Asset::Image(Arc::new(pixels::decode(
+                &bytes,
+                &self.config.image,
+                path.to_string_lossy().into_owned(),
+            )?))
+        };
+        self.media_cache = Some((path.to_owned(), modified, meta.len(), asset.clone()));
+        Ok(asset)
+    }
+
+    fn local(&mut self) -> Result<Asset> {
         let mut paths = self.local_paths()?;
         fastrand::shuffle(&mut paths);
         // Prefer another image, but permit a singleton library.
-        paths.sort_by_key(|p| self.previous.as_deref() == Some(&p.to_string_lossy()));
+        paths.sort_by_key(|p| {
+            self.previous
+                .as_deref()
+                .map(|s| s.strip_prefix("video:").unwrap_or(s))
+                == Some(&p.to_string_lossy())
+        });
         for path in paths.into_iter().take(32) {
-            let attempt = (|| {
-                let file = fs::File::open(&path)?;
-                let bytes = pixels::read_bounded(file, self.config.byte_limit())?;
-                pixels::decode(
-                    &bytes,
-                    &self.config.image,
-                    path.to_string_lossy().into_owned(),
-                )
-            })();
+            let attempt = self.load_media(&path);
             if let Ok(image) = attempt {
                 return Ok(image);
             }
@@ -236,7 +289,7 @@ impl Provider {
         }
         fastrand::shuffle(&mut posts);
         posts.sort_by_key(|p| {
-            self.previous.as_deref() == Some(&self.config.moebooru.domain.post_label(p.id))
+            self.previous.as_deref() == Some(&self.config.moebooru.post_label(p.id))
         });
         let mut last_error = Error::NoImages;
         for post in posts.into_iter().take(3) {
@@ -251,7 +304,7 @@ impl Provider {
     fn posts(&self, page: u32) -> Result<Vec<Post>> {
         let response = self
             .client
-            .get(self.config.moebooru.domain.posts_url())
+            .get(self.config.moebooru.posts_url())
             .query(&[
                 ("limit", "100"),
                 ("page", &page.to_string()),
@@ -268,8 +321,11 @@ impl Provider {
             .into_iter()
             .find(|s| !s.is_empty())
             .ok_or(Error::NoImages)?;
-        let url = Url::parse(text).map_err(|_| Error::Url)?;
-        if !allowed_url(self.config.moebooru.domain, &url) {
+        let url = Url::parse(self.config.moebooru.posts_url())
+            .map_err(|_| Error::Url)?
+            .join(text)
+            .map_err(|_| Error::Url)?;
+        if !self.config.moebooru.allows_url(&url) {
             return Err(Error::Url);
         }
         let response = self.client.get(url).send()?.error_for_status()?;
@@ -283,7 +339,7 @@ impl Provider {
         let prepared = pixels::decode(
             &bytes,
             &self.config.image,
-            self.config.moebooru.domain.post_label(post.id),
+            self.config.moebooru.post_label(post.id),
         )?;
         let extension = match image::guess_format(&bytes)? {
             image::ImageFormat::Png => "png",
@@ -293,7 +349,7 @@ impl Provider {
         let hash = hex::encode(Sha256::digest(&bytes));
         let name = format!(
             "{}-{}-{}.{}",
-            self.config.moebooru.domain.namespace(),
+            self.config.moebooru.namespace(),
             post.id,
             &hash[..20],
             extension
@@ -326,9 +382,11 @@ fn collect(root: &Path, recursive: bool, depth: usize, out: &mut Vec<PathBuf>) -
             collect(&path, recursive, depth + 1, out)?;
         } else if kind.is_file()
             && path.extension().is_some_and(|s| {
-                ["jpg", "jpeg", "png"]
-                    .iter()
-                    .any(|x| s.to_string_lossy().eq_ignore_ascii_case(x))
+                [
+                    "jpg", "jpeg", "png", "mp4", "m4v", "mov", "wmv", "avi", "mkv", "webm",
+                ]
+                .iter()
+                .any(|x| s.to_string_lossy().eq_ignore_ascii_case(x))
             })
         {
             out.push(path);
@@ -373,7 +431,10 @@ fn managed_image(name: &str) -> bool {
     }
     let parts: Vec<_> = stem.split('-').collect();
     parts.len() == 3
-        && matches!(parts[0], "konachan" | "yandere")
+        && (matches!(parts[0], "konachan" | "yandere")
+            || parts[0]
+                .strip_prefix("booru")
+                .is_some_and(|s| s.len() == 12 && s.bytes().all(|b| b.is_ascii_hexdigit())))
         && !parts[1].is_empty()
         && parts[1].bytes().all(|b| b.is_ascii_digit())
         && parts[2].len() == 20
@@ -445,6 +506,105 @@ pub fn cleanup_downloads(root: &Path, max_images: usize) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fixed_file_is_cached_and_folder_choice_does_not_repeat() {
+        let root = std::env::temp_dir().join(format!("iidxbg-media-{:016x}", fastrand::u64(..)));
+        fs::create_dir(&root).unwrap();
+        for name in ["a.png", "b.png"] {
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 60, 255]))
+                .save(root.join(name))
+                .unwrap();
+        }
+        let mut config = Config::parse(include_str!("../iidxbg.toml"))
+            .unwrap()
+            .for_surface(Surface::Results);
+        config.image.width = 64;
+        config.image.height = 64;
+        config.source = Source::File;
+        config.media_path = root.join("a.png");
+        config.local_directory = root.clone();
+        let mut provider = Provider::new(config.clone()).unwrap();
+        let a = provider.prepare_media().unwrap();
+        let b = provider.prepare_media().unwrap();
+        assert!(Arc::ptr_eq(&a.first(), &b.first()));
+        config.source = Source::Local;
+        let mut provider = Provider::new(config).unwrap();
+        let a = provider.prepare_media().unwrap();
+        let b = provider.prepare_media().unwrap();
+        assert_ne!(a.label, b.label);
+        fs::remove_file(root.join("a.png")).unwrap();
+        fs::remove_file(root.join("b.png")).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn compatible_api_fetches_relative_images_and_uses_its_own_cache_namespace() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/post.json", server.local_addr().unwrap());
+        server.set_nonblocking(true).unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 60, 255]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let handle = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            let mut requests = 0;
+            while requests < 2 && std::time::Instant::now() < deadline {
+                let Ok((mut stream, _)) = server.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let count = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                let body = if request.starts_with("GET /post.json?") {
+                    assert!(request.contains("tags=rating%3Asafe"));
+                    br#"[{"id":42,"sample_url":"/image.png"}]"#.to_vec()
+                } else {
+                    assert!(request.starts_with("GET /image.png "));
+                    png.get_ref().clone()
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+                requests += 1;
+            }
+            requests
+        });
+        let root = std::env::temp_dir().join(format!("iidxbg-api-{:016x}", fastrand::u64(..)));
+        let mut config = Config::parse(include_str!("../iidxbg.toml"))
+            .unwrap()
+            .for_surface(Surface::Results);
+        config.source = Source::Remote;
+        config.image.width = 64;
+        config.image.height = 64;
+        config.moebooru.api_url = endpoint;
+        config.moebooru.page_max = 1;
+        config.moebooru.save_directory = root.clone();
+        let label = config.moebooru.post_label(42);
+        let mut provider = Provider::new(config).unwrap();
+        let result = provider.prepare();
+        assert_eq!(handle.join().unwrap(), 2);
+        assert_eq!(result.unwrap().label, label);
+        assert_eq!(cleanup_downloads(&root, 1).unwrap(), 0);
+        let entries = fs::read_dir(&root)
+            .unwrap()
+            .collect::<std::io::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(managed_image(entries[0].file_name().to_str().unwrap()));
+        fs::remove_file(entries[0].path()).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn separate_surface_sources_reload_atomically_and_fail_independently() {
@@ -458,7 +618,7 @@ mod tests {
         }
         let path = root.join("iidxbg.toml");
         let mut text = include_str!("../iidxbg.toml")
-            .split("[sources.results]")
+            .split("\n[sources.results]")
             .next()
             .unwrap()
             .to_owned();

@@ -59,10 +59,16 @@ reproduces its static anchors using `pefile` and `capstone`. These checks now co
 [34 / 010-0917](iidx34-010-0917-analysis.md). The premium-area and concentrate
 hooks exist only in the last profile.
 
-`scripts/package.ps1` copies the built DLL, repository-default commented TOML, licenses,
-and diagnostic image into `dist/iidxbg`, then produces a ZIP. It preserves an
-existing dist configuration. Delete or move dist yourself if you want a pristine
-package after locally editing that configuration.
+The [video playback investigation](video-surfaces.md) measures the D3D9 texture
+refresh cost and the Media Foundation decode options for playing custom video in
+the existing surface positions. `tools/video-bench` reproduces those numbers
+(D3D9Ex upload benchmark and a Source Reader decode benchmark); it is a
+development tool and is not part of the plugin or the release package.
+
+`scripts/package.ps1` recreates `dist/iidxbg` with the built DLL, configuration
+GUI and repository TOML, then produces a ZIP containing those three files.
+Use the repository-default TOML when packaging; do not ship personal media paths
+or an installation's edited configuration. No video or FFmpeg binary is bundled.
 
 ## GitHub builds
 

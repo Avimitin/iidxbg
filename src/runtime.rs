@@ -32,8 +32,8 @@ use windows_sys::Win32::System::{
     },
     Memory::{
         MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ,
-        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READWRITE, VirtualProtect,
-        VirtualQuery,
+        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, PAGE_READWRITE,
+        VirtualProtect, VirtualQuery,
     },
     Threading::{
         GetCurrentProcess, GetCurrentThread, GetCurrentThreadId, SetThreadPriority,
@@ -56,6 +56,11 @@ static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 static GPU: Mutex<Graphics> = Mutex::new(Graphics::new());
 static NATIVE: OnceLock<Native> = OnceLock::new();
 static EVENTS: OnceLock<SyncSender<Event>> = OnceLock::new();
+/// Exact `illust` clip captured from the native
+/// `set_archive(clip, archive, "result_bg")` call. Binding this object avoids a
+/// second named lookup returning a different CMovieClip wrapper.
+pub(super) static RESULTS_CLIP: AtomicUsize = AtomicUsize::new(0);
+pub(super) static RESULTS_STOCK_REBINDS: AtomicU32 = AtomicU32::new(0);
 
 fn graphics_state() -> Option<MutexGuard<'static, Graphics>> {
     match GPU.try_lock() {
@@ -132,6 +137,34 @@ unsafe fn field(object: usize, offset: usize) -> usize {
     unsafe { ((object + offset) as *const usize).read() }
 }
 
+/// Best-effort user-mode readability probe for pointers read out of game
+/// objects. Some native fields are IDs or flags rather than addresses; blindly
+/// dereferencing them faults the game process (Rust panic containment cannot
+/// catch an access violation).
+fn readable(address: usize) -> bool {
+    if !(0x10000..=0x0000_7fff_ffff_ffff).contains(&address) {
+        return false;
+    }
+    let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { VirtualQuery(address as _, &mut info, std::mem::size_of_val(&info)) } == 0 {
+        return false;
+    }
+    info.State == MEM_COMMIT
+        && info.Protect & PAGE_GUARD == 0
+        && info.Protect & 0xff != PAGE_NOACCESS
+}
+
+/// Read a pointer-sized field only when both the object and the field address
+/// are committed and readable. Returns `None` for ID/flag fields, which is the
+/// normal case for several frame offsets.
+fn pointer_field(object: usize, offset: usize) -> Option<usize> {
+    let address = object.checked_add(offset)?;
+    if !readable(object) || !readable(address) || !readable(address.saturating_add(7)) {
+        return None;
+    }
+    Some(unsafe { (address as *const usize).read() })
+}
+
 struct Texture {
     // Stable 8-byte-aligned storage. Native constructor initializes all 64 bytes.
     wrapper: Box<[u64; 8]>,
@@ -205,6 +238,15 @@ impl Texture {
             *self = unsafe { Self::upload(native, image) }?;
             return Ok(true);
         }
+        unsafe { self.write_pixels(image) }?;
+        Ok(false)
+    }
+
+    /// Graphics-owner-only update; shared descriptors keep a fixed canvas.
+    unsafe fn write_pixels(&self, image: &Prepared) -> Result<()> {
+        if self.width != image.width || self.height != image.height {
+            return Err(Error::Native("shared texture dimensions changed"));
+        }
         let raw = self.wrapper[1] as *mut c_void;
         let texture = unsafe { IDirect3DTexture9::from_raw_borrowed(&raw) }
             .ok_or(Error::Native("no D3D9 texture"))?;
@@ -226,8 +268,45 @@ impl Texture {
             }
         }
         unsafe { texture.UnlockRect(0) }.map_err(|_| Error::Native("UnlockRect"))?;
-        self.center = [image.width as f32 * 0.5, image.height as f32 * 0.5];
-        Ok(false)
+        Ok(())
+    }
+
+    /// Diagnostic-only: rewrite the existing texture from the same image and
+    /// report lock / row-copy / unlock microseconds separately. The pixels are
+    /// unchanged, so the visible frame is unaffected. This measures whether
+    /// per-frame video uploads fit the game thread; it is never called on a
+    /// production hot path.
+    unsafe fn probe_refresh(texture: &Texture, image: &Prepared) -> Option<(u128, u128, u128)> {
+        if texture.width != image.width || texture.height != image.height {
+            return None;
+        }
+        let raw = texture.wrapper[1] as *mut c_void;
+        let texture = unsafe { IDirect3DTexture9::from_raw_borrowed(&raw) }?;
+        let mut locked = D3DLOCKED_RECT::default();
+        let lock_start = Instant::now();
+        unsafe { texture.LockRect(0, &mut locked, std::ptr::null(), D3DLOCK_DISCARD as u32) }
+            .ok()?;
+        let lock_us = lock_start.elapsed().as_micros();
+        let row_bytes = image.width as usize * 4;
+        if locked.pBits.is_null() || locked.Pitch < row_bytes as i32 {
+            let _ = unsafe { texture.UnlockRect(0) };
+            return None;
+        }
+        let copy_start = Instant::now();
+        for y in 0..image.height as usize {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    image.bgra.as_ptr().add(y * row_bytes),
+                    (locked.pBits as *mut u8).add(y * locked.Pitch as usize),
+                    row_bytes,
+                );
+            }
+        }
+        let copy_us = copy_start.elapsed().as_micros();
+        let unlock_start = Instant::now();
+        unsafe { texture.UnlockRect(0) }.ok()?;
+        let unlock_us = unlock_start.elapsed().as_micros();
+        Some((lock_us, copy_us, unlock_us))
     }
 
     fn descriptor(&self) -> *const u8 {
@@ -250,10 +329,16 @@ struct Graphics {
     selection: Selection,
     background: usize,
     texture: Option<Texture>,
-    bound: bool,
+    /// Current-update wrapper only; the native lookup pool is reset/reused.
+    clip: usize,
+    /// Bounds retries while the AFP timeline is still creating its children.
+    probe: u32,
+    /// One scene scan per results visit (diagnostic only).
+    scene_diag: bool,
     attempted: bool,
     failed: bool,
     layout_reported: bool,
+    playback: Option<crate::media::Playback>,
 }
 
 impl Graphics {
@@ -262,13 +347,17 @@ impl Graphics {
             selection: Selection {
                 active: false,
                 selected: None,
+                video: None,
             },
             background: 0,
             texture: None,
-            bound: false,
+            clip: 0,
+            probe: 0,
+            scene_diag: false,
             attempted: false,
             failed: false,
             layout_reported: false,
+            playback: None,
         }
     }
 
@@ -306,10 +395,22 @@ impl Graphics {
         if !self.selection.active {
             let pending = PENDING.try_lock().ok().and_then(|mut p| p.take());
             self.selection.enter(pending);
+            self.playback = self
+                .selection
+                .video
+                .as_ref()
+                .map(|video| crate::media::Asset::Video(video.clone()).play());
             request_images();
             self.background = background;
             self.attempted = false;
-            self.bound = false;
+            self.clip = 0;
+            self.probe = 0;
+            self.scene_diag = false;
+            // Do not reuse a clip captured from the previous results instance;
+            // the original callback for this frame has already run and will
+            // re-capture it when it binds its archive texture.
+            RESULTS_CLIP.store(0, Ordering::Release);
+            RESULTS_STOCK_REBINDS.store(0, Ordering::Relaxed);
             self.layout_reported = false;
             if self.selection.selected.is_none() {
                 event(Event::Stock);
@@ -320,36 +421,43 @@ impl Graphics {
             event(Event::Fault("unexpected simultaneous results instance"));
             return;
         }
+        // Setup runs later than the first component update. Never cache a
+        // failed lookup against a null movie as the visit's permanent target.
+        let movie = unsafe { field(background, n.profile.layout.background_movie) };
+        if movie == 0 {
+            return;
+        }
+        if !self.scene_diag {
+            self.scene_diag = true;
+            if background >= n.profile.layout.scene_background {
+                // Probe after setup, not against the uninitialized component.
+                unsafe {
+                    surfaces::diag_results(n, background);
+                };
+            }
+        }
         if !self.attempted {
             self.attempted = true;
             if let Some(image) = &self.selection.selected {
                 let start = Instant::now();
-                let mut recreated = false;
                 let mut failed = false;
                 if let Some(texture) = self.texture.as_mut() {
-                    match unsafe { texture.refresh(n, image) } {
-                        Ok(changed) => recreated = changed,
-                        Err(_) => failed = true,
+                    if unsafe { texture.refresh(n, image) }.is_err() {
+                        failed = true;
                     }
                 } else {
                     match unsafe { Texture::upload(n, image) } {
-                        Ok(texture) => {
-                            self.texture = Some(texture);
-                            recreated = true;
-                        }
+                        Ok(texture) => self.texture = Some(texture),
                         Err(_) => failed = true,
                     }
                 }
                 if failed {
                     self.texture = None;
-                    self.bound = false;
+                    self.clip = 0;
                     event(Event::Fault(
                         "texture upload/registration failed; stock this visit",
                     ));
                 } else {
-                    if recreated {
-                        self.bound = false;
-                    }
                     event(Event::Applied {
                         width: image.width,
                         height: image.height,
@@ -358,41 +466,55 @@ impl Graphics {
                 }
             }
         }
-        if let Some(texture) = &self.texture {
-            // Rebind only once per visit; the clip keeps the descriptor until the
-            // stock restore or a new visit.
-            if self.bound {
+        if let (Some(playback), Some(texture)) = (&mut self.playback, self.texture.as_mut())
+            && playback.update()
+        {
+            if unsafe { texture.refresh(n, &playback.pixels) }.is_err() {
+                unsafe { self.stock(n) };
+                self.texture = None;
+                self.failed = true;
+                event(Event::Fault("video texture refresh failed; stock fallback"));
                 return;
             }
-            let find: FindClip = unsafe { n.function("find_clip") };
-            let clip = unsafe {
-                find(
-                    field(background, n.profile.layout.background_movie),
-                    c"illust".as_ptr().cast(),
-                )
+            self.selection.selected = Some(playback.pixels.clone());
+        }
+        if let Some(texture) = &self.texture {
+            let archive = unsafe { field(background, n.profile.layout.background_archive) };
+            let game_clip = RESULTS_CLIP.load(Ordering::Acquire);
+            // Named wrappers belong to a resettable native pool. Acquire the
+            // current frame's wrapper; never reuse one from a previous update.
+            self.clip = if archive != 0 && game_clip != 0 {
+                game_clip
+            } else {
+                let find: FindClip = unsafe { n.function("find_clip") };
+                unsafe { find(movie, c"illust".as_ptr().cast()) }
             };
-            if clip == 0 {
+            self.probe = self.probe.saturating_add(1);
+            let node = pointer_field(self.clip, 512).unwrap_or(usize::MAX) as u32;
+            if self.probe == 1 {
+                event(Event::Diag(format!(
+                    "results ready probe: movie={movie:#x} archive={archive:#x} clip={:#x} node={node:#x}",
+                    self.clip
+                )));
+            }
+            if node & 0x8000_0000 != 0 {
                 return;
             }
             let set: SetTexture = unsafe { n.function("set_texture") };
             let visible: Visible = unsafe { n.function("set_visible") };
-            if unsafe { set(clip, texture.descriptor()) } == 0 {
-                unsafe {
-                    self.stock(n);
-                }
+            if unsafe { set(self.clip, texture.descriptor()) } == 0 {
+                unsafe { self.stock(n) };
                 self.failed = true;
                 event(Event::Fault("AFP bind rejected; feature disabled"));
                 return;
             }
-            // The archive-only center helper uses archive metadata and is skipped
-            // by the stock no-archive branch. Center the uploaded texture explicitly
-            // after binding; keep the clip's native position/scale/animation.
+            // Both native branches use illust. The no-archive branch hides it
+            // each frame; the archive branch rebinds it each frame.
             let origin: OriginPixels = unsafe { n.function("set_origin_pixels") };
             unsafe {
-                origin(clip, texture.center[0], texture.center[1]);
-                visible(clip, 1);
+                origin(self.clip, texture.center[0], texture.center[1]);
+                visible(self.clip, 1);
             }
-            self.bound = true;
             if !self.layout_reported {
                 self.layout_reported = true;
                 event(Event::Centered {
@@ -408,8 +530,9 @@ impl Graphics {
             self.stock(n);
         }
         self.texture = None;
-        self.bound = false;
+        self.clip = 0;
         self.attempted = false;
+        RESULTS_CLIP.store(0, Ordering::Release);
     }
 }
 
@@ -423,6 +546,7 @@ fn boundary(f: impl FnOnce()) {
 unsafe extern "system" fn background_hook(this: usize, tick: u32) -> usize {
     let n = NATIVE.get().expect("published before hook");
     let original: Background = unsafe { n.function("background_update") };
+    RESULTS_CLIP.store(0, Ordering::Release);
     let result = unsafe { original(this, tick) };
     if !ENABLED.load(Ordering::Acquire) || !READY.load(Ordering::Acquire) {
         return result;
@@ -469,6 +593,7 @@ fn retire_scene(n: &Native, this: usize) {
                 state.invalidate(n);
             }
             state.background = 0;
+            state.playback = None;
             state.selection.leave();
             request_images();
         }
@@ -752,7 +877,7 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
         let mut providers = Providers::new(config)?;
         PREMIUM_AREA_ENABLED.store(providers.enabled(Surface::PremiumArea), Ordering::Release);
         CONCENTRATION_ENABLED.store(providers.enabled(Surface::Concentration), Ordering::Release);
-        let mut images: [Option<Arc<Prepared>>; Surface::COUNT] = Default::default();
+        let mut images: [Option<crate::media::Asset>; Surface::COUNT] = Default::default();
         // Keep lifecycle hooks active even while configured off, so subsequent
         // visits can request a reload and re-enable without reinstalling hooks.
         attach(&root)?;
@@ -800,94 +925,71 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                     reload_request(&root, &config_path, &mut providers, &mut character);
                 }
                 let mut failed = false;
-                // The concentration background reuses the premium-area image
-                // until its own source section gains an override.
-                let share = providers.config().concentration_shares_premium()
-                    && providers.enabled(Surface::Concentration);
+                let config = providers.config().clone();
+                let roots: [Surface; Surface::COUNT] = std::array::from_fn(|i| {
+                    config
+                        .binding_root(Surface::ALL[i])
+                        .expect("validated binding graph")
+                });
+                let mut needed = [false; Surface::COUNT];
                 for surface in Surface::ALL {
-                    if STOP.load(Ordering::Acquire) {
-                        break;
+                    if config.surface_enabled(surface) {
+                        needed[roots[surface.index()].index()] = true;
                     }
-                    // A newer scene request supersedes this batch. Stop early so
-                    // its download/decode does not delay the fresh snapshot.
-                    if generation != REQUEST.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if share && surface == Surface::Concentration {
-                        images[surface.index()] = images[Surface::PremiumArea.index()].clone();
-                        continue;
-                    }
-                    // One accepted config snapshot governs this preparation batch.
-                    // Maintenance failures do not discard a usable image or cause a redownload.
-                    let cleanup = |providers: &Providers| match providers.cleanup(surface) {
-                        Ok(0) => {}
-                        Ok(count) => log(
-                            &root,
-                            &format!(
-                                "{}: removed {count} oldest managed downloads",
-                                surface.name()
-                            ),
-                        ),
-                        Err(e) => log(
-                            &root,
-                            &format!("{}: download cleanup failed: {e}", surface.name()),
-                        ),
-                    };
-                    cleanup(&providers);
-                    // A concentration-only configuration still prepares one
-                    // premium-area image to share.
-                    let prepared = if share
-                        && surface == Surface::PremiumArea
-                        && !providers.enabled(surface)
+                }
+                // Prepare each binding root exactly once. Bound consumers receive
+                // the same Arc, random choice, decoder and GPU cache identity.
+                for root_surface in Surface::ALL {
+                    if STOP.load(Ordering::Acquire) || generation != REQUEST.load(Ordering::Acquire)
                     {
-                        providers.prepare_unchecked(surface).map(Some)
-                    } else {
-                        providers.prepare(surface)
-                    };
-                    match prepared {
-                        Ok(image) => {
-                            if let Some(image) = &image {
+                        break;
+                    }
+                    if needed[root_surface.index()] {
+                        match providers.prepare_media(root_surface) {
+                            Ok(asset) => {
                                 log(
                                     &root,
-                                    &format!("Prepared {}: {}", surface.name(), image.label),
+                                    &format!("Prepared {}: {}", root_surface.name(), asset.label),
+                                );
+                                images[root_surface.index()] = Some(asset);
+                            }
+                            Err(e) => {
+                                failed = true;
+                                log(
+                                    &root,
+                                    &format!(
+                                        "{}: {e}; retaining previous media",
+                                        root_surface.name()
+                                    ),
                                 );
                             }
-                            images[surface.index()] = image.map(Arc::new);
                         }
-                        Err(e) => {
-                            failed = true;
-                            log(
-                                &root,
-                                &format!(
-                                    "{} preparation failed: {e}; retaining its previous image, retry in 60 seconds",
-                                    surface.name()
-                                ),
-                            );
+                        if let Err(e) = providers.cleanup(root_surface) {
+                            log(&root, &format!("{} cleanup: {e}", root_surface.name()));
                         }
-                    }
-                    cleanup(&providers);
-                    // Publish each completed query so a local result does not wait
-                    // behind downloads for other surfaces. Active visits stay frozen.
-                    for item in Surface::ALL {
-                        let needed =
-                            providers.enabled(item) || (share && item == Surface::PremiumArea);
-                        if !needed {
-                            images[item.index()] = None;
-                        }
-                    }
-                    if share {
-                        images[Surface::Concentration.index()] =
-                            images[Surface::PremiumArea.index()].clone();
+                    } else {
+                        images[root_surface.index()] = None;
                     }
                     if generation == REQUEST.load(Ordering::Acquire)
                         && !STOP.load(Ordering::Acquire)
                     {
-                        let pending = images[0]
-                            .as_ref()
-                            .map(|p| Pending::Image(p.clone()))
-                            .unwrap_or(Pending::Disabled);
-                        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(pending);
-                        surfaces::publish(&images);
+                        let choices: [Option<crate::media::Asset>; Surface::COUNT] =
+                            std::array::from_fn(|i| {
+                                config
+                                    .surface_enabled(Surface::ALL[i])
+                                    .then(|| images[roots[i].index()].clone())
+                                    .flatten()
+                            });
+                        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = match &choices[0] {
+                            Some(crate::media::Asset::Image(p)) => Some(Pending::Image(p.clone())),
+                            Some(crate::media::Asset::Video(v)) => Some(Pending::Video(v.clone())),
+                            None if !config.surface_enabled(Surface::Results) => {
+                                Some(Pending::Disabled)
+                            }
+                            // Preparation failure is not an explicit disable.
+                            None => None,
+                        };
+                        surfaces::publish(&choices);
                     }
                 }
                 let superseded = generation != REQUEST.load(Ordering::Acquire);
@@ -1003,6 +1105,11 @@ extern "C" fn graphics(event_id: u32, _: *const Frame, _: *mut c_void) {
 extern "C" fn shutdown() {
     ENABLED.store(false, Ordering::Release);
     STOP.store(true, Ordering::Release);
+    if let Some(state) = graphics_state()
+        && let Some(video) = &state.selection.video
+    {
+        video.stop();
+    }
     wake_worker();
     // SDK has already sent DESTROY and stopped rendering. DLL is pinned:
     // vtable callbacks remain valid and simply call their original functions.

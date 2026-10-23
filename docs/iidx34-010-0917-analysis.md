@@ -202,6 +202,25 @@ the customize preview uses (`data/graphic/customize/subbg0_concentration.jpg` is
 its 120x120 thumbnail). The AFP group and exact z-order of the premium sprite
 still need confirmation. Until those checks are done, keep the 1280x720 canvas.
 
+## Live binding and selection draw order (2026-10-23)
+
+The background callback `0x906eb0` runs on every component update and
+unconditionally calls `set_archive`/`set_origin` when the result archive exists,
+or hides the `illust` clip when it does not. A custom descriptor bound only once
+is therefore overwritten on the next frame. The runtime now caches the clip but
+reasserts the custom descriptor, pixel origin and visibility after **every**
+original call; the upload stays once per visit. See the 2026-10-23 entry in
+[validation](validation.md).
+
+The selection `movie_draw` dispatcher (`0x9362b0` → `0x936300`) draws a textured
+quad from an AFP descriptor. It is called from the stage draw dispatcher
+(`0x8e46e0`, PRERENDER) and the render compositor (`0x9248f0`), before the AFP
+2D scene render (`0x328b40`). A replacement drawn there is covered by the
+selection scene's AFP background and UI. This build family's selection movie
+loader is stubbed, so the stock selection background is an AFP element; a
+selection replacement needs an AFP-level rebind or an owned sprite below the UI,
+not the movie quad. No such implementation has been validated in-game.
+
 ## Reproduction
 
 ```powershell
@@ -229,4 +248,147 @@ score/title/graph visibility, repeated visits, early exit, device reset and
 shutdown, and frame-time tails. The changed `sub_18094fb50` common scene helper
 is called from selection and result initialization; its exact behavioral effect
 is not established. No in-game claim is made from the earlier 34 offline
-validation.
+validation. This describes the original offline investigation; see the live
+follow-up below for subsequent tests and remaining limitations.
+
+## Results follow-up, 2026-10-23
+
+Input rechecked from `\\2dx.lan.sh1mar.in\IIDX34\modules\bm2dx.dll`:
+18,200,216 bytes, SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`.
+Preferred/observed base `0x180000000`. Addresses below are RVAs, offsets decimal.
+
+### Delayed setup and temporary wrappers
+
+- `0x906b80` initializes the background's +288/+296/+304 layer pointers to zero.
+  `0x9178a0`, loop at `0x9179cc`, later dispatches component slot 1 at
+  `0x9179ea`, passing the result archive from scene +104. The first update
+  hook can precede this setup. A one-time probe there cannot describe the
+  visible result screen.
+- Setup `0x906da0` creates header (+288, priority 90), `bg1_clear` or
+  `bg1_failed` (+296, priority 154), and difficulty/music (+304, priority 126).
+  Preserve the original update `0x906eb0`; it also maintains timers and text.
+- The actual `illust` lookup is `0x907014`; archive rebind `0x907037`; the
+  no-archive hide is `0x90704e`. A failed SP result was observed with archive
+  zero, movie `0x18bcf49f8`, root handle `0x5ba0002f`, and a **valid** `illust`
+  handle `0x5c28013d`. Thus archive zero does not mean no usable illustration.
+- `find_clip` `0x81ea30` delegates to `0x32d1a0`. The latter returns a
+  536-byte temporary wrapper from pool RVA `0xc3b9820`, incrementing the
+  counter at `0xc500a80`, capacity 2500. Initializer `0x329bb0` looks up the
+  AFP node and writes the handle at wrapper +512, name at +256 and owner at
+  +528. `0x328860`, `0x328d80`, and `0x328e80` reset the pool and invalidate
+  handles to -18; `0x328860` is called at `0x924480` in the main update path.
+  A wrapper address is not a scene-lifetime object. The runtime now obtains
+  the current update's wrapper, using the native `result_bg` bind capture
+  when available or a fresh `illust` lookup otherwise.
+- `set_texture` `0x329e50` can return success even for an invalid handle:
+  its success byte starts at 1 and the loop is skipped for a negative +512.
+  Check the handle before interpreting its return value. For valid handles,
+  the Microsoft x64 ABI is `(wrapper in RCX, descriptor in RDX) -> AL`.
+  The function applies AFP ordinal 137 and follows linked handles via 106.
+- Scene +16264 was an incorrect background guess: `0x914685` initializes
+  scene +16256 via `0x5b9af0`, then `0x5b9b90`/`0x5b9320` create `point_1p`
+  or `point_2p`, storing the layer at +8 (priority 101). The speculative
+  +16264/+16360 suppression and priority-1000 overlay were removed.
+
+The first live diagnostic build reached a failed result but a cached wrapper
+produced a misplaced image overlapping UI. That build is not a successful
+replacement test. It motivated the current-update lifetime correction.
+
+Read-only asset inspection corroborates the names: `data/graphic/0/result.ifs`
+SHA-256 `d6383a173e1aa84d6ad47b58311b11f13456f13396add403e093c7f7c2e717ff`,
+51,278,960 bytes. Embedded `afp/bg1_clear` SHA-256
+`0ea96326c22dacc0559392387d34191a3ca2b43d5c3ae0337155994b42e60f7d`
+and `afp/bg1_failed` SHA-256
+`dc1e3ac32e7009b0465e449135b56779783db71907fc31009379f813a8120505`
+both have `illust`, `stage`, and timer names in their decoded string tables.
+Names alone do not establish geometry or visibility. No archive was edited
+or copied into the repository.
+
+Reproduce with the exact DLL in IDA: decompile the functions above, follow
+the pool counter's write xrefs, then launch with `iidxbg.dll` and record a
+failed result's `results initialized` and `results ready probe` log lines
+after setup. Compare screenshots over several frames, not only bind success.
+See `docs/validation.md` for the final live verification status.
+
+### Test-launch monitor shortcut
+
+The earlier investigation at
+`D:\Share\chart-requester\docs\iidx34-monitor-check-patch-analysis.md`
+describes a different hash; its addresses were not copied blindly.
+For the exact hash above, decompilation and instruction checks establish:
+
+| RVA | Original | Test replacement | Effect |
+|---|---|---|---|
+| `0x91b0a8` | `0f8540010000` | `90e940010000` | Always take native completion at `0x91b1ee`, skipping TDJ validation/retries |
+| `0x91b37b` | `8d1480c1e202` | `8d1440909090` | Reset `0x91b350` uses 3 * selected rate instead of 20 * rate |
+
+`0x91af80` still calculates FPS with `0x92bc70(...,359)`. At 120 Hz,
+the shortened interval is 360 updates. The averaging branch starts at 460,
+so this shortcut uses the rolling measurement, not the longer average.
+Completion still stores measured FPS at configuration +28 (`0x91b21c`)
+and performs native monitor/scene bookkeeping. No timing constant is forged.
+The changed LEA produces EDX; subsequent MOVD/conversion/store consumes EDX,
+without consuming the original SHL's flags. This is a test-launch shortcut,
+not evidence of equivalent calibration precision or non-TDJ behavior.
+
+`scripts/spice-monitor-bypass.py` checks disk SHA-256, both complete original
+instructions, and both live instructions before writing through the Spice
+memory API. It reads back both patches and supports `--restore`. Disk bytes
+remain unchanged; it must be applied after API startup on each new process.
+Both live readbacks passed and the subsequent launch reached attract mode.
+
+
+## 2026-10-23 selection background and shared media follow-up
+
+Input remains 18,200,216-byte bm2dx.dll, SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`,
+base `0x180000000`, image size `0xc5ff000`. No disk game modifications.
+All following addresses are RVAs and offsets are decimal.
+
+- `0x8d8290` selection update is `(this, u8 tick, context)` in the Microsoft x64
+  ABI. It updates `this +160` with `0x5d0a30`, then forwards all three incoming
+  arguments to `0x94fcf0` at `0x8d849b`. The exact profile now selects the extended
+  trampoline rather than dropping RDX/R8. Other build profiles are unchanged.
+- `0x5cf1f0` builds the frame. `frame_layer1` is frame +80 (scene +240),
+  `frame_layer2` is frame +88 (scene +248), and `frame_layer3` is frame +96
+  (scene +256). The layer2 factory call at `0x5cf3d1` uses frame +16 (scene +176)
+  for priority. Character is frame +120 (scene +280), with priority frame +28.
+  The frame builder now has its own 16-byte live-code guard.
+- The live selection scene had scene +176 =157; a custom priority-158 AFP sprite
+  appears behind the song list, radar and native character. The previous D3D
+  movie-hook quad was obscured by later AFP drawing. The native movie call now
+  still runs on this profile; only layer2's root is masked for replacement.
+- Layer2 is validated against selection vtable `0xd52508`, layer vtable
+  `0xd968b0`, nonzero layer +8, and nonnegative AFP root at layer +528.
+  Property 4103 visibility is saved, restored before original scene update and
+  teardown, and hidden only after valid sprite creation. Release observations
+  clear owner identity before the native pool can reuse it. Custom sprite nodes
+  are released before their Arc-owned texture wrapper; reset releases all strong
+  GPU leases while retaining the selected CPU asset.
+- Existing graph adapter `0xa1fd30` positions/clips the substituted node at graph
+  +64, without changing its scale. This permits a shared cover texture to be
+  scaled to 432x870 while cover sprites use 432x723. Covers still temporarily
+  substitute the original art pair; native adjustment, visibility and text run.
+
+Reproduce: verify the exact input with scripts/verify-native.py; decompile
+0x8d8290 and 0x5cf1f0; configure song_select as a fixed local MP4; restart the
+plugin, enter selection, and compare captures separated by several seconds.
+For descriptor sharing, set sources.sudden_plus.bind and sources.target_graph.bind
+both to lift, with sources.lift selecting the fixed clip. Enable the native
+covers/graph during gameplay and compare `media sprite` descriptor addresses.
+Unit tests also establish shared session clock/frame identity and last-lease stop.
+
+Live reproduction succeeded on guest SP Caramel Pain ANOTHER 8 with native
+LIFT&SUDDEN+ and pacemaker enabled. Both cover sprites (priority 108) and graph
+(priority 145) reported descriptor `0xb666f5e8`, canvas 432x723. LIFT's diagnostic
+timecode advanced from 0.100/frame 3 to 4.367/frame 131 while the graph moved.
+Capture pairs and test coverage are indexed in docs/validation.md. Selection
+and graph also played the user's H.264 clip; the final config restores that clip
+after the diagnostic cover-pattern test.
+
+Unknowns: no live tests on IIDX 33 or the other IIDX 34 hash, no DP/player-2 test,
+no GPU loss induced under simultaneous playback, and no 1080p60 frame-time-tail
+benchmark. The new selection mask is embedded only in this exact build. The
+user previously confirmed static high-grade results; new high-grade video needs
+an actual A/AA/AAA visit to establish live coverage separately from failed/F.

@@ -2,6 +2,7 @@
   "sha256": "c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534",
   "image_size": 207613952,
   "rvas": {
+    "select_frame_build": 6091248,
     "background_update": 9465520,
     "result_cleanup": 9524672,
     "find_clip": 8514096,
@@ -42,6 +43,10 @@
     "concentration_layer": 6521888
   },
   "guards": [
+    {
+      "rva": 6091248,
+      "hex": "488bc4554154415541564157488da818"
+    },
     {
       "rva": 9465520,
       "hex": "488bc4554154415541564157488da8c8"
@@ -224,7 +229,9 @@
     "afp_group_set": 13003760,
     "select_vtable": 13968648,
     "selection_fade": 0,
-    "select_update_extended": 0,
+    "select_update_extended": 1,
+    "select_background": 248,
+    "select_background_priority": 176,
     "select_frame_chara": 280,
     "layer_vtable": 14248112,
     "afp_property_get": 13003816,
