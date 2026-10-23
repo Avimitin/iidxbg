@@ -1253,3 +1253,39 @@ passed. Local ZIP was checked byte-for-byte and uses the committed default TOML.
 - v0.4.0 iidxbg.dll SHA-256: `53a9985452166aded8cf2aecaa4387833e164fb60447a4e20fe5ad9d45309a08`.
 
 - v0.4.0 iidxbg-config.exe SHA-256: `8bcca1f53aaaf1f0dc756b3e8c883891b9563baf4717cc75d748bdeb724015b9`.
+
+## Version 0.4.1 UI release and deployment (2026-10-23)
+
+The configuration GUI uses icon-only navigation (grey inactive, green selected,
+with tooltips), a title-only app bar, larger text and spacing, and square controls
+and panels. Gallery sizing uses the shared sidebar and title-bar dimensions.
+The removed toolbar's reload/folder-opening handlers were removed as well.
+
+Validation: 47 core tests and 13 GUI tests passed; three optional core tests
+requiring network/media fixtures were ignored. Both strict all-target Clippy
+checks, formatting checks, release builds and the DLL load/export/SDK ABI smoke
+test passed. The running GUI was visually checked with a disposable TOML at
+normal and minimum window sizes, including navigation states and scrolling
+through the longer provider form. No actual in-game testing was performed for
+this UI release; the game remained stopped. Native rendering code is unchanged.
+
+Deployed DLL, tool and GUI were SHA-256 checked against the local release builds.
+The game machine's active TOML was preserved byte-for-byte; personal repository
+TOML edits are excluded from the release commit.
+
+- iidxbg.dll: `2377b8dd041f690f6e3240b4ad151db8be0d52396a6c059a280d10471bba54a7`.
+- iidxbg-config.exe: `87c6668f5135e9aebd260f89143d687dee959e18f464250011cd8e8493bfed44`.
+- iidxbg-tool.exe: `b84b6621338609def2f30f007a083be81cae50ab8590b56b789198573237639b`.
+
+The requested game-DLL restoration check found that deployed `bm2dx.dll` already
+matches the original input, SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`, also matching
+the original supplied download. The monitor shortcut was memory-only and expired
+when the game exited, so no game-DLL write was needed.
+
+At the user's request, 40 obsolete top-level entries (test builds/configs,
+verification outputs, probe logs, backup plugins and the separately named older
+game DLL) were removed from the IIDX34 modules folder after copying and hashing
+them into ignored local recovery storage. The recovery manifest is
+`target/module-cleanup-20261023-v041/manifest.jsonl`. Current configuration,
+media/cache and other active plugins were preserved. IIDX33 was untouched.

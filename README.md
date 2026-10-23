@@ -77,7 +77,9 @@
 
 最新版本：[GitHub Releases](https://github.com/Avimitin/iidxbg/releases)
 
-当前版本：**0.4.0**。支持 Bilibili 点播来源、扫码登录与直播间播放。
+当前版本：**0.4.1**。配置界面采用直角边框、更大的文字与间距；侧栏仅显示图标，
+灰色表示未选中，绿色表示当前页面，悬停可查看名称。标题栏只保留标题和窗口控制。
+支持 Bilibili 点播来源、扫码登录与直播间播放。
 
 ## Bilibili 来源
 

@@ -46,10 +46,6 @@ impl ConfigStore {
         &self.path
     }
 
-    pub fn dir(&self) -> &Path {
-        self.path.parent().unwrap_or_else(|| Path::new("."))
-    }
-
     pub fn config(&self) -> &Config {
         &self.config
     }
@@ -95,6 +91,7 @@ impl ConfigStore {
 
     /// Re-read the file, discarding an invalid draft. Keeps the current state
     /// and reports an error when the file on disk is not valid.
+    #[cfg(test)]
     pub fn reload(&mut self) -> bool {
         let text = match fs::read_to_string(&self.path) {
             Ok(text) => text,

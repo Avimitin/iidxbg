@@ -4,6 +4,9 @@ use gpui_kit::component::{Theme, ThemeMode, scroll::ScrollbarMode};
 use gpui_kit::*;
 use iidxbg::config::{Config, Surface};
 
+pub const SIDEBAR_WIDTH: f32 = 88.;
+pub const TITLE_BAR_HEIGHT: f32 = 52.;
+
 pub fn install(cx: &mut App) {
     Theme::update(cx, |theme| {
         theme.mode = ThemeMode::Dark;
@@ -48,9 +51,9 @@ pub fn install(cx: &mut App) {
         theme.colors.title_bar_border = rgb(0x2a2a2a).into();
         theme.colors.status_bar = rgb(0x000000).into();
         theme.colors.status_bar_border = rgb(0x2a2a2a).into();
-        theme.font_size = px(14.);
-        theme.radius = px(8.);
-        theme.radius_lg = px(12.);
+        theme.font_size = px(16.);
+        theme.radius = px(0.);
+        theme.radius_lg = px(0.);
         theme.tokens = Theme::from(&theme.colors).tokens;
     });
     Theme::set_scrollbar_mode(ScrollbarMode::Always, cx);

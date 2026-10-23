@@ -145,13 +145,6 @@ impl SurfaceEditor {
     pub(crate) fn input_for(&self, field: SurfaceTextField) -> &Entity<InputState> {
         &self.inputs[field as usize]
     }
-    pub fn set_inputs_from_config(&self, config: &Config, window: &mut Window, cx: &mut App) {
-        for field in SurfaceTextField::ALL {
-            self.input_for(field).update(cx, |state, cx| {
-                state.set_value(field.value(config, self.surface), window, cx)
-            });
-        }
-    }
 }
 impl AppView {
     pub(crate) fn on_surface_text(
@@ -279,16 +272,21 @@ fn field_row(
         .gap_3()
         .child(
             div()
-                .w(px(110.))
+                .w(px(144.))
                 .flex_shrink_0()
-                .text_sm()
+                .text_base()
                 .child(label.to_owned()),
         )
-        .child(Input::new(editor.input_for(field)).flex_1())
+        .child(
+            Input::new(editor.input_for(field))
+                .large()
+                .flex_1()
+                .min_w_0(),
+        )
         .when(picker, |row| {
             row.child(
                 Button::new(SharedString::from(format!("pick-{}", field.key())))
-                    .small()
+                    .large()
                     .outline()
                     .label("浏览…")
                     .on_click(cx.listener(move |view, _, window, cx| {
@@ -312,8 +310,8 @@ pub(crate) fn render_editor(
     let mut body = v_flex()
         .id("surface-settings")
         .w_full()
-        .p_5()
-        .gap_4()
+        .p_7()
+        .gap_6()
         .flex_1()
         .min_h_0()
         .overflow_y_scrollbar();
@@ -324,7 +322,7 @@ pub(crate) fn render_editor(
     {
         body = body.child(widgets::error_banner(error));
     }
-    let mut bindings = h_flex().gap_2().flex_wrap().child(
+    let mut bindings = h_flex().gap_3().flex_wrap().child(
         widgets::segment_button("bind-independent", "独立设置", !bound).on_click(
             cx.listener(move |view, _, window, cx| view.bind_surface(surface, None, window, cx)),
         ),
@@ -343,13 +341,13 @@ pub(crate) fn render_editor(
         );
     }
     body = body
-        .child(div().text_sm().child("绑定到组件"))
+        .child(div().text_base().child("绑定到组件"))
         .child(bindings);
     if bound {
         body = body
             .child(
                 div()
-                    .text_sm()
+                    .text_base()
                     .text_color(theme::muted_ink())
                     .child(format!(
                         "共享「{}」的来源和当前媒体；该组件的开关保持独立。",
@@ -365,7 +363,7 @@ pub(crate) fn render_editor(
                     ),
             );
     } else {
-        let mut sources = h_flex().gap_2().flex_wrap();
+        let mut sources = h_flex().gap_3().flex_wrap();
         for (source, label) in [
             (Source::File, "固定图片 / 视频"),
             (Source::Local, "文件夹随机"),
@@ -387,7 +385,7 @@ pub(crate) fn render_editor(
         body = body.child(sources);
         if c.source == Source::Bilibili {
             use iidxbg::bilibili::Mode;
-            let mut modes = h_flex().gap_2().flex_wrap();
+            let mut modes = h_flex().gap_3().flex_wrap();
             for (mode, label) in [
                 (Mode::Video, "固定视频"),
                 (Mode::Recommendations, "随机推荐"),
@@ -449,12 +447,12 @@ pub(crate) fn render_editor(
                         false,
                         cx,
                     ));
-                    let mut folders = h_flex().gap_2().flex_wrap();
+                    let mut folders = h_flex().gap_3().flex_wrap();
                     for folder in &view.bili.folders {
                         let id = folder.id.to_string();
                         folders = folders.child(
                             Button::new(SharedString::from(format!("fav-{}", folder.id)))
-                                .small()
+                                .large()
                                 .outline()
                                 .label(folder.title.clone())
                                 .on_click(cx.listener(move |view, _, window, cx| {
@@ -481,14 +479,14 @@ pub(crate) fn render_editor(
                 Mode::Recommendations => {
                     body = body.child(
                         div()
-                            .text_sm()
+                            .text_base()
                             .child("使用已登录账号的推荐流，每次准备随机选择一个视频。"),
                     )
                 }
             }
             body = body.child(
                 div()
-                    .text_xs()
+                    .text_sm()
                     .text_color(theme::muted_ink())
                     .child(if c.bilibili.selection.mode == Mode::Live {
                         "直播使用短分片缓冲，不保存整场直播；未开播时保留原画面，播放中断后自动重连。无音频。"
@@ -518,7 +516,7 @@ pub(crate) fn render_editor(
                 .child(
                     h_flex()
                         .gap_3()
-                        .child(div().text_sm().child("包含子文件夹"))
+                        .child(div().text_base().child("包含子文件夹"))
                         .child(Switch::new("recursive").checked(c.recursive).on_change(
                             cx.listener(move |view, checked, _, cx| {
                                 view.commit_surface(0, cx, |doc| {
@@ -533,7 +531,7 @@ pub(crate) fn render_editor(
                 );
         }
         if matches!(c.source, Source::Remote | Source::Mixed) {
-            let mut domains = h_flex().gap_2();
+            let mut domains = h_flex().gap_3();
             for (domain, label) in [
                 (MoebooruDomain::Net, "Konachan.net"),
                 (MoebooruDomain::Com, "Konachan.com"),
@@ -574,7 +572,7 @@ pub(crate) fn render_editor(
                 ))
                 .child(
                     div()
-                        .text_xs()
+                        .text_sm()
                         .text_color(theme::muted_ink())
                         .child("填完整 post.json 地址；留空使用上面选择的网站。"),
                 )
@@ -622,8 +620,8 @@ pub(crate) fn render_editor(
                 ));
         }
         let mut fit = h_flex()
-            .gap_2()
-            .child(div().text_sm().child("图片适配（视频拉伸）"));
+            .gap_3()
+            .child(div().text_base().child("图片适配（视频拉伸）"));
         for (value, label) in [
             (Fit::Cover, "裁切铺满"),
             (Fit::Contain, "完整显示 + 模糊边缘"),
@@ -652,7 +650,7 @@ pub(crate) fn render_editor(
             .child(
                 h_flex()
                     .gap_3()
-                    .child(div().text_sm().child("显示选曲角色"))
+                    .child(div().text_base().child("显示选曲角色"))
                     .child(
                         Switch::new("frame-chara")
                             .checked(config.selection.frame_chara)
@@ -671,8 +669,8 @@ pub(crate) fn render_editor(
                 cx,
             ));
     }
-    body = body.child(div().text_xs().text_color(theme::muted_ink()).child("自动保存。下次进入组件时生效；随机媒体在一次访问中保持不变。视频静音循环，预览显示首帧。"))
-        .child(Button::new("refresh-preview").outline().label("刷新预览").on_click(cx.listener(move |view, _, _, cx| view.refresh_surface(surface, cx))));
+    body = body.child(div().text_sm().text_color(theme::muted_ink()).child("自动保存。下次进入组件时生效；随机媒体在一次访问中保持不变。视频静音循环，预览显示首帧。"))
+        .child(Button::new("refresh-preview").large().outline().label("刷新预览").on_click(cx.listener(move |view, _, _, cx| view.refresh_surface(surface, cx))));
     div()
         .id("surface-editor-overlay")
         .absolute()
@@ -690,28 +688,27 @@ pub(crate) fn render_editor(
             v_flex()
                 .id("surface-editor")
                 .w(px(
-                    (window.viewport_size().width.as_f32() - 32.).clamp(480., 820.)
+                    (window.viewport_size().width.as_f32() - 32.).clamp(480., 960.)
                 ))
                 .h(px(
-                    (window.viewport_size().height.as_f32() - 48.).clamp(360., 850.)
+                    (window.viewport_size().height.as_f32() - 48.).clamp(360., 900.)
                 ))
                 .bg(theme::card_bg())
                 .border_1()
                 .border_color(theme::line())
-                .rounded(px(12.))
                 .overflow_hidden()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     h_flex()
-                        .p_5()
-                        .gap_4()
+                        .p_7()
+                        .gap_6()
                         .items_center()
                         .border_b_1()
                         .border_color(theme::line())
                         .child(
                             div()
                                 .flex_1()
-                                .text_xl()
+                                .text_2xl()
                                 .font_semibold()
                                 .child(theme::surface_title(surface)),
                         )

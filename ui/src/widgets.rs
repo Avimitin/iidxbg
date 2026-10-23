@@ -19,26 +19,16 @@ pub fn status_pill(
 ) -> AnyElement {
     h_flex()
         .px_2()
-        .h(px(22.))
+        .h(px(26.))
         .items_center()
         .justify_center()
-        .rounded_full()
         .bg(background)
         .border_1()
         .border_color(foreground.opacity(0.35))
         .text_color(foreground)
-        .text_size(px(11.))
+        .text_size(px(13.))
         .font_medium()
         .child(label.into())
-        .into_any_element()
-}
-
-pub fn dot(color: Hsla, size: f32) -> AnyElement {
-    div()
-        .size(px(size))
-        .flex_shrink_0()
-        .rounded_full()
-        .bg(color)
         .into_any_element()
 }
 
@@ -46,7 +36,6 @@ pub fn icon_box(icon: IconName, color: Hsla, size: f32) -> AnyElement {
     div()
         .size(px(size))
         .flex_shrink_0()
-        .rounded(px(size * 0.28))
         .bg(theme::page_bg())
         .border_1()
         .border_color(color.opacity(0.32))
@@ -63,7 +52,7 @@ pub fn segment_button(
     selected: bool,
 ) -> Button {
     Button::new(id)
-        .small()
+        .large()
         .ghost()
         .label(label)
         .selected(selected)
@@ -75,6 +64,31 @@ pub fn segment_button(
         })
 }
 
+pub fn navigation_button(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    selected: bool,
+) -> Button {
+    let color = if selected {
+        theme::accent()
+    } else {
+        theme::muted_ink()
+    };
+    Button::new(id)
+        .ghost()
+        .with_size(Size::Size(px(56.)))
+        .w(px(56.))
+        .selected(selected)
+        .text_color(color)
+        .icon(
+            Icon::new(icon)
+                .with_size(Size::Size(px(24.)))
+                .text_color(color),
+        )
+        .tooltip(label)
+}
+
 pub fn note(
     icon: IconName,
     text: impl Into<SharedString>,
@@ -84,9 +98,8 @@ pub fn note(
     h_flex()
         .w_full()
         .items_start()
-        .gap_2()
-        .p_3()
-        .rounded(px(10.))
+        .gap_3()
+        .p_4()
         .bg(background)
         .border_1()
         .border_color(foreground.opacity(0.3))
@@ -99,7 +112,7 @@ pub fn note(
         .child(
             div()
                 .flex_1()
-                .text_xs()
+                .text_sm()
                 .line_height(relative(1.5))
                 .child(text.into()),
         )
@@ -118,20 +131,19 @@ pub fn error_banner(message: impl Into<SharedString>) -> AnyElement {
 pub fn close_button(id: impl Into<gpui::ElementId>) -> Button {
     Button::new(id)
         .ghost()
-        .small()
+        .large()
         .icon(Icon::new(IconName::X).with_size(Size::Small))
 }
 
 pub fn muted_path(text: impl Into<SharedString>) -> AnyElement {
     div()
         .w_full()
-        .px_3()
-        .py_2()
-        .rounded(px(8.))
+        .px_4()
+        .py_3()
         .border_1()
         .border_color(theme::line_soft())
         .bg(theme::page_bg())
-        .text_sm()
+        .text_base()
         .text_color(theme::muted_ink())
         .overflow_hidden()
         .child(

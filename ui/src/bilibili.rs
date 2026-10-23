@@ -5,7 +5,7 @@ use gpui::{
     px,
 };
 use gpui_kit::{
-    component::{button::Button, h_flex, scroll::ScrollableElement, v_flex},
+    component::{Sizable, button::Button, h_flex, scroll::ScrollableElement, v_flex},
     *,
 };
 use iidxbg::{
@@ -208,23 +208,23 @@ fn qr_image(url: &str) -> iidxbg::Result<Prepared> {
 }
 impl AppView {
     pub(crate) fn render_bilibili(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut body=v_flex().id("bilibili-account-page").size_full().overflow_y_scrollbar().p_6().gap_4()
-            .child(div().text_xl().child("Bilibili"))
-            .child(div().text_sm().text_color(theme::muted_ink()).child("扫码登录后，可在每个组件中选择推荐、合集或收藏夹。请在运行游戏的机器上登录；登录信息仅对本机当前 Windows 用户有效。"))
-            .child(div().text_sm().child(self.bili.status.clone()));
-        let mut buttons = h_flex().gap_2().flex_wrap();
+        let mut body=v_flex().id("bilibili-account-page").size_full().overflow_y_scrollbar().p_8().gap_6()
+            .child(div().text_2xl().child("Bilibili"))
+            .child(div().text_base().text_color(theme::muted_ink()).child("扫码登录后，可在每个组件中选择推荐、合集或收藏夹。请在运行游戏的机器上登录；登录信息仅对本机当前 Windows 用户有效。"))
+            .child(div().text_base().child(self.bili.status.clone()));
+        let mut buttons = h_flex().gap_3().flex_wrap();
         for (id, label, command) in [
             ("login", "扫码登录", Command::Login),
             ("refresh", "刷新账号 / 收藏夹", Command::Refresh),
             ("cancel", "取消扫码", Command::Cancel),
             ("logout", "退出本机登录", Command::Logout),
         ] {
-            buttons = buttons.child(Button::new(id).outline().label(label).on_click(cx.listener(
-                move |view, _, _, cx| {
+            buttons = buttons.child(Button::new(id).large().outline().label(label).on_click(
+                cx.listener(move |view, _, _, cx| {
                     view.bili.command(command);
                     cx.notify();
-                },
-            )));
+                }),
+            ));
         }
         body = body.child(buttons);
         if let Some(qr) = &self.bili.qr {
@@ -235,14 +235,14 @@ impl AppView {
                     .object_fit(ObjectFit::Contain),
             );
         }
-        body = body.child(div().text_sm().child("我的收藏夹"));
+        body = body.child(div().text_base().child("我的收藏夹"));
         for folder in &self.bili.folders {
             body = body.child(widgets::muted_path(format!(
                 "{} · ID {}",
                 folder.title, folder.id
             )));
         }
-        body=body.child(div().text_xs().text_color(theme::muted_ink()).child("在手机 App 中维护收藏夹即可更新视频来源。组件设置中可直接选择这里的收藏夹，也可粘贴其他可访问的收藏夹链接。视频静音循环播放，不提交观看进度。"));
+        body=body.child(div().text_sm().text_color(theme::muted_ink()).child("在手机 App 中维护收藏夹即可更新视频来源。组件设置中可直接选择这里的收藏夹，也可粘贴其他可访问的收藏夹链接。视频静音循环播放，不提交观看进度。"));
         body.into_any_element()
     }
 }

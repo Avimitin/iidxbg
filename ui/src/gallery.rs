@@ -13,7 +13,6 @@ use crate::{
 };
 
 const GRID_COLUMNS: f32 = 4.;
-const TITLE_BAR_HEIGHT: f32 = 34.;
 const WIDE_RATIO: f32 = 16. / 9.;
 
 const TOP_ROW: [Surface; 4] = [
@@ -41,8 +40,8 @@ impl AppView {
         let viewport = window.viewport_size();
         // The board is deliberately full-bleed: no page padding and no hero.
         // The custom title bar is the only chrome around it.
-        let width = (viewport.width.as_f32() - 154.).max(320.);
-        let height = (viewport.height.as_f32() - TITLE_BAR_HEIGHT).max(240.);
+        let width = (viewport.width.as_f32() - theme::SIDEBAR_WIDTH).max(320.);
+        let height = (viewport.height.as_f32() - theme::TITLE_BAR_HEIGHT).max(240.);
         let cell_width = width / GRID_COLUMNS;
 
         // The top band has four 16:9 tiles. Give it at least 30% of the content
@@ -288,8 +287,8 @@ fn info_panel(
     accent: Hsla,
     dense: bool,
 ) -> AnyElement {
-    let margin = if dense { 8. } else { 10. };
-    let padding = if dense { 8. } else { 10. };
+    let margin = if dense { 12. } else { 16. };
+    let padding = if dense { 12. } else { 16. };
 
     v_flex()
         .absolute()
@@ -297,8 +296,7 @@ fn info_panel(
         .right(px(margin))
         .bottom(px(margin))
         .p(px(padding))
-        .gap_1()
-        .rounded(px(6.))
+        .gap_2()
         .bg(theme::hover_panel_bg())
         .border_1()
         .border_color(theme::accent().opacity(0.38))
@@ -318,7 +316,7 @@ fn info_panel(
                         .min_w_0()
                         .overflow_hidden()
                         .text_ellipsis()
-                        .text_size(px(if dense { 12. } else { 14. }))
+                        .text_size(px(if dense { 15. } else { 18. }))
                         .font_semibold()
                         .text_color(theme::ink())
                         .child(title.to_owned()),
@@ -331,10 +329,10 @@ fn info_panel(
             div()
                 .w_full()
                 .overflow_hidden()
-                .text_size(px(if dense { 10. } else { 12. }))
-                .line_height(relative(1.35))
+                .text_size(px(if dense { 13. } else { 15. }))
+                .line_height(relative(1.5))
                 .text_color(theme::muted_ink())
-                .when(!dense, |this| this.max_h(px(34.)))
+                .when(!dense, |this| this.max_h(px(46.)))
                 .child(description.to_owned()),
         )
         .child(
@@ -343,7 +341,7 @@ fn info_panel(
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .text_size(px(if dense { 9. } else { 11. }))
+                .text_size(px(if dense { 12. } else { 14. }))
                 .child(
                     div()
                         .min_w_0()
@@ -356,7 +354,7 @@ fn info_panel(
                     h_flex()
                         .flex_shrink_0()
                         .items_center()
-                        .gap_1()
+                        .gap_2()
                         .font_medium()
                         .text_color(accent)
                         .child(action.to_owned())

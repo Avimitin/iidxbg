@@ -10,11 +10,7 @@ use gpui::{
     SharedString, Styled, Window, div, img, prelude::FluentBuilder as _, px, relative,
 };
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{
-    Sizable, StyledExt, TitleBar,
-    button::{Button, ButtonVariants},
-    h_flex, v_flex,
-};
+use gpui_kit::component::{StyledExt, TitleBar, h_flex, v_flex};
 use gpui_kit::*;
 use iidxbg::config::Surface;
 use toml_edit::DocumentMut;
@@ -70,7 +66,6 @@ pub struct AppView {
     pub(crate) editor: Option<SurfaceEditor>,
     pub(crate) previews: [PreviewSlot; Surface::COUNT],
     pub(crate) defaults: [Arc<RenderImage>; Surface::COUNT],
-    pub(crate) app_error: Option<SharedString>,
     pub(crate) hovered_surface: Option<Surface>,
     jobs: Sender<PreviewRequest>,
     preview_sync_seq: u64,
@@ -101,7 +96,6 @@ impl AppView {
             editor: None,
             previews: std::array::from_fn(|_| PreviewSlot::default()),
             defaults,
-            app_error: None,
             hovered_surface: None,
             jobs: job_tx,
             preview_sync_seq: 0,
@@ -238,31 +232,6 @@ impl AppView {
     pub(crate) fn close_editor(&mut self, cx: &mut Context<Self>) {
         self.editor = None;
         cx.notify();
-    }
-
-    pub(crate) fn reload_from_disk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.store.reload() {
-            self.app_error = Some(
-                self.store
-                    .error()
-                    .unwrap_or("重新载入失败")
-                    .to_owned()
-                    .into(),
-            );
-            cx.notify();
-            return;
-        }
-        self.app_error = None;
-        if let Some(editor) = &self.editor {
-            editor.set_inputs_from_config(self.store.config(), window, cx);
-        }
-        self.schedule_preview_sync(cx, 0);
-        cx.notify();
-    }
-
-    pub(crate) fn reveal_config(&mut self) {
-        let parent = self.store.dir();
-        let _ = std::process::Command::new("explorer").arg(parent).spawn();
     }
 
     fn schedule_preview_sync(&mut self, cx: &mut Context<Self>, delay_ms: u64) {
@@ -450,58 +419,51 @@ impl Render for AppView {
             self.render_gallery(window, cx)
         };
         let sidebar = v_flex()
-            .w(px(154.))
+            .w(px(theme::SIDEBAR_WIDTH))
             .h_full()
             .flex_shrink_0()
-            .p_3()
-            .gap_2()
+            .py_4()
+            .items_center()
+            .gap_4()
             .bg(theme::sidebar_bg())
+            .border_r_1()
+            .border_color(theme::line())
             .child(
-                widgets::segment_button("page-surfaces", "显示组件", !self.bili_page).on_click(
-                    cx.listener(|view, _, _, cx| {
-                        view.bili_page = false;
-                        view.editor = None;
-                        cx.notify();
-                    }),
-                ),
+                widgets::navigation_button(
+                    "page-surfaces",
+                    IconName::LayoutGrid,
+                    "显示组件",
+                    !self.bili_page,
+                )
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.bili_page = false;
+                    view.editor = None;
+                    cx.notify();
+                })),
             )
             .child(
-                widgets::segment_button("page-bilibili", "Bilibili", self.bili_page).on_click(
-                    cx.listener(|view, _, _, cx| {
-                        view.bili_page = true;
-                        view.editor = None;
-                        cx.notify();
-                    }),
-                ),
+                widgets::navigation_button(
+                    "page-bilibili",
+                    IconName::TvMinimalPlay,
+                    "Bilibili",
+                    self.bili_page,
+                )
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.bili_page = true;
+                    view.editor = None;
+                    cx.notify();
+                })),
             );
         let title_bar = TitleBar::new()
+            .h(px(theme::TITLE_BAR_HEIGHT))
+            .pl_6()
             .bg(theme::sidebar_bg())
             .border_color(theme::line())
             .child(
-                Button::new("reload-config")
-                    .ghost()
-                    .small()
-                    .label("重新载入")
-                    .on_click(cx.listener(|this, _, window, cx| this.reload_from_disk(window, cx))),
-            )
-            .child(
-                Button::new("open-config-folder")
-                    .ghost()
-                    .small()
-                    .label("配置目录")
-                    .on_click(cx.listener(|this, _, _, _| this.reveal_config())),
-            )
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(widgets::dot(theme::accent(), 5.))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::muted_ink())
-                            .child("iidxbg 配置"),
-                    ),
+                div()
+                    .text_size(px(18.))
+                    .font_semibold()
+                    .child("iidxbg 配置"),
             );
 
         v_flex()
@@ -511,9 +473,6 @@ impl Render for AppView {
             .bg(theme::page_bg())
             .text_color(theme::ink())
             .child(title_bar)
-            .when_some(self.app_error.clone(), |view, error| {
-                view.child(widgets::error_banner(error))
-            })
             .child(
                 h_flex()
                     .w_full()
@@ -595,7 +554,6 @@ impl Render for ErrorView {
                     .bg(theme::card_bg())
                     .border_1()
                     .border_color(theme::line())
-                    .rounded(px(16.))
                     .child(widgets::icon_box(
                         IconName::TriangleAlert,
                         theme::danger(),
@@ -609,7 +567,7 @@ impl Render for ErrorView {
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_base()
                             .line_height(relative(1.55))
                             .text_color(theme::muted_ink())
                             .child(self.message.clone()),
@@ -619,7 +577,7 @@ impl Render for ErrorView {
                     })
                     .child(
                         div()
-                            .text_xs()
+                            .text_sm()
                             .line_height(relative(1.5))
                             .text_color(theme::faint_ink())
                             .child(
