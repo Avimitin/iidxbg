@@ -7,7 +7,7 @@ graphics device or provider network requests are used. Outputs stay in target.
 import argparse
 import ctypes
 import hashlib
-import json
+from native_profiles import load_profile
 from pathlib import Path
 import shutil
 import struct
@@ -22,8 +22,7 @@ args = parser.parse_args()
 assert ctypes.sizeof(ctypes.c_void_p) == 8
 root = Path(__file__).resolve().parent.parent
 digest = hashlib.sha256(args.game.read_bytes()).hexdigest()
-profile = next(p for path in (root / "src/profiles").glob("*.json")
-               if (p := json.loads(path.read_text()))["sha256"] == digest)
+profile = load_profile(digest)
 work = root / "target" / ("smoke-attach-" + uuid.uuid4().hex)
 work.mkdir()
 shutil.copy2(args.plugin, work / "iidxbg.dll")

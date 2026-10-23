@@ -6,7 +6,7 @@ See docs/feasibility.md for interpretation and limitations.
 
 import argparse
 import hashlib
-import json
+from native_profiles import load_profile
 import struct
 from pathlib import Path
 
@@ -25,10 +25,7 @@ def main():
     args = parser.parse_args()
     data = args.dll.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
-    profiles = Path(__file__).resolve().parent.parent / "src/profiles"
-    profile = next((p for path in profiles.glob("*.json")
-                    if (p := json.loads(path.read_text()))["sha256"] == digest), None)
-    require(profile is not None, "Unexpected DLL SHA-256")
+    profile = load_profile(digest)
     pe = pefile.PE(data=data)
     base = pe.OPTIONAL_HEADER.ImageBase
     require(base == 0x180000000 and pe.FILE_HEADER.Machine == 0x8664,
@@ -77,7 +74,7 @@ def main():
                 and insn.operands[0].imm == base + target,
                 f"Unexpected direct call at {rva:x}")
 
-    if profile["label"] == "IIDX 33 / 20260812":
+    if profile["sha256"] == "c61b6dcb8894062e56d60da8ca90053b27f129e1a8e8da5e54457aa42602397d":
         table(0xDA4800, ".?AVCStageResultScene@@",
               {7: 0x92ADD0, 13: 0x92C2D0, 14: 0x92D970, 15: 0x92DF20, 24: 0x92DE20})
         table(0xDA2188, ".?AVStageResultDrawBg@@",

@@ -71,6 +71,34 @@ unsafe fn original<T: Copy>(name: &str) -> T {
 }
 
 type Unary = unsafe extern "system" fn(usize) -> usize;
+
+// Exact 010-0917 primitive ABI: this+40 is {u32 count, u32 padding,
+// pointer}. Native update copies all 16 bytes to AFP without initializing
+// padding. A stale 0x10000 there is mistaken for a 48-byte shader descriptor.
+// Initialize it before the synchronous native copy; retain the original call
+// and return value. Do this even when background replacement is disabled.
+// See docs/iidx34-crash-20261023.md for hashes, RVAs and lifetime evidence.
+unsafe fn update_primitive(this: usize, update: Unary) -> usize {
+    unsafe {
+        if ((this + 8) as *const u32).read_unaligned() != 0 {
+            ((this + 44) as *mut u32).write_unaligned(0);
+        }
+        update(this)
+    }
+}
+
+unsafe extern "system" fn box_fill_update(this: usize) -> usize {
+    unsafe { update_primitive(this, original("box_fill_update")) }
+}
+
+unsafe extern "system" fn box_outline_update(this: usize) -> usize {
+    unsafe { update_primitive(this, original("box_outline_update")) }
+}
+
+unsafe extern "system" fn line_update(this: usize) -> usize {
+    unsafe { update_primitive(this, original("line_update")) }
+}
+
 type Release = unsafe extern "system" fn(usize);
 type SelectUpdate = unsafe extern "system" fn(usize, u8, usize) -> usize;
 type CoverBuild = unsafe extern "system" fn(usize, usize, i32, u8, u8);
@@ -2248,6 +2276,17 @@ pub(super) fn attach(n: &Native) -> Result<()> {
         hooks.push(("concentration_apply", concentration_apply as *const ()));
         hooks.push(("concentration_show", concentration_show as *const ()));
     }
+    // Only the analyzed hash has these entries and live-code guards. Do not
+    // apply the layout workaround to other builds based on version labels.
+    for (name, detour) in [
+        ("box_fill_update", box_fill_update as *const ()),
+        ("box_outline_update", box_outline_update as *const ()),
+        ("line_update", line_update as *const ()),
+    ] {
+        if n.profile.rvas.contains_key(name) {
+            hooks.push((name, detour));
+        }
+    }
     let mut created = Vec::new();
     let mut trampolines = Vec::new();
     for (name, detour) in hooks {
@@ -2283,6 +2322,62 @@ pub(super) fn attach(n: &Native) -> Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod primitive_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static COPIES: RefCell<Vec<[u8; 56]>> = const { RefCell::new(Vec::new()) };
+    }
+
+    unsafe extern "system" fn capture(this: usize) -> usize {
+        let object = unsafe { (this as *const [u8; 56]).read_unaligned() };
+        COPIES.with(|copies| copies.borrow_mut().push(object));
+        0x12345678
+    }
+
+    #[test]
+    fn primitive_workaround_preserves_fields_and_forwards_once() {
+        for handle in [0_u32, 123] {
+            for padding in [0_u32, 0x10000, u32::MAX] {
+                let mut object = [0xa5_u8; 56];
+                object[8..12].copy_from_slice(&handle.to_le_bytes());
+                object[44..48].copy_from_slice(&padding.to_le_bytes());
+                let mut expected = object;
+                if handle != 0 {
+                    expected[44..48].fill(0);
+                }
+                COPIES.with(|copies| copies.borrow_mut().clear());
+                let result = unsafe { update_primitive(object.as_mut_ptr() as usize, capture) };
+                assert_eq!(result, 0x12345678);
+                assert_eq!(object, expected);
+                COPIES.with(|copies| assert_eq!(*copies.borrow(), vec![expected]));
+            }
+        }
+    }
+
+    #[test]
+    fn primitive_workaround_has_exact_build_and_entry_guards() {
+        for profile in crate::profile::supported() {
+            for (name, rva) in [
+                ("box_fill_update", 0x339db0),
+                ("box_outline_update", 0x3397f0),
+                ("line_update", 0x33bb10),
+            ] {
+                if profile.sha256
+                    == "c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534"
+                {
+                    assert_eq!(profile.rvas.get(name), Some(&rva));
+                    assert!(profile.guards.iter().any(|g| g.rva == rva));
+                } else {
+                    assert!(!profile.rvas.contains_key(name));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

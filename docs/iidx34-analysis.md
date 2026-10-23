@@ -86,7 +86,7 @@ within the descriptor. It is not interchangeable with a D3D texture pointer
 or an archive object. `iidxbg` uses stable aligned Box storage, calls the native
 constructor, and calls the non-deleting destructor before freeing storage.
 
-Runtime guards in `src/profiles/iidx34-20260917.json` cover every directly called native function
+Runtime guards in `src/profiles/iidx34/010-20260916.rs` cover every directly called native function
 and all three modified vtable slots. File SHA-256 must match before memory hooks are
 installed. Unknown loaded entry-byte mismatches and already replaced slots are rejected.
 The verified MinHook relay form is recognized for every supported profile; see the

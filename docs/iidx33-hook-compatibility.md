@@ -11,7 +11,7 @@ Startup failed: Unsupported or malformed game DLL: native entry guard mismatch
 
 The installed game file is 18,467,992 bytes, SHA-256
 `c61b6dcb8894062e56d60da8ca90053b27f129e1a8e8da5e54457aa42602397d`,
-exactly the supported IIDX 33 / 20260812 profile. Installed iidxbg SHA-256:
+exactly the supported IIDX 33 / 010-20260819 profile. Installed iidxbg SHA-256:
 `5f77e848231f801ae39027b85e232a08b3c9eb4e5374dafb016ba131e02212f8`.
 
 The run log records the game loaded at `0x180000000` at 23:53:53 on 2026-10-20,

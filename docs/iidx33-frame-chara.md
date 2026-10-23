@@ -1,4 +1,4 @@
-# IIDX 33 / 20260812: selection frame character
+# IIDX 33 / 010-20260819: selection frame character
 
 Analysis date: 2026-10-21. Offline disassembly/decompilation, emulation and
 mock-native tests; **no in-game validation of these controls**.

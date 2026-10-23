@@ -6,7 +6,7 @@ Run with either of the exact DLLs named in docs/*-background-surfaces.md.
 
 import argparse
 import hashlib
-import json
+from native_profiles import load_profile
 import struct
 from pathlib import Path
 
@@ -16,7 +16,7 @@ import pefile
 
 PROFILES = {
     "c61b6dcb8894062e56d60da8ca90053b27f129e1a8e8da5e54457aa42602397d": {
-        "label": "IIDX 33 / 20260812",
+        "label": "IIDX 33 / 010-20260819",
         "size": 18467992,
         "image_size": 0xBB95000,
         "rect": 0xD88520,
@@ -175,8 +175,7 @@ def verify(path):
     for rva, expected in profile["stubs"].items():
         pattern = bytes.fromhex(expected)
         require(pe.get_data(rva, len(pattern)) == pattern, f"Stub differs at {rva:#x}")
-    runtime = next(p for file in (Path(__file__).resolve().parent.parent / "src/profiles").glob("*.json")
-                   if (p := json.loads(file.read_text()))["sha256"] == digest)
+    runtime = load_profile(digest)
     for guard in runtime["guards"]:
         require(pe.get_data(guard["rva"], 16).hex() == guard["hex"],
                 f"Runtime guard differs at {guard['rva']:#x}")

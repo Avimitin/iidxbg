@@ -21,6 +21,7 @@ Outputs:
 
 ```powershell
 target/release/iidxbg-tool.exe verify 'C:\path\bm2dx.dll'
+target/release/iidxbg-tool.exe profiles
 target/release/iidxbg-tool.exe test-image iidxbg/test-card.png
 target/release/iidxbg-tool.exe prepare iidxbg.toml preview.png
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
@@ -54,7 +55,7 @@ The additional [background-surface investigation](background-surfaces.md)
 covers song selection, SUDDEN+, LIFT, the gameplay target graph, the premium
 area and concentrate mode. `python scripts/verify-surfaces.py path/to/bm2dx.dll`
 reproduces its static anchors using `pefile` and `capstone`. These checks now cover the optional runtime surface hooks. Build-specific evidence is recorded for
-[33 / 20260812](iidx33-background-surfaces.md),
+[33 / 010-20260819](iidx33-background-surfaces.md),
 [34 / 20260917](iidx34-background-surfaces.md) and
 [34 / 010-0917](iidx34-010-0917-analysis.md). The premium-area and concentrate
 hooks exist only in the last profile.
@@ -69,6 +70,51 @@ development tool and is not part of the plugin or the release package.
 GUI and repository TOML, then produces a ZIP containing those three files.
 Use the repository-default TOML when packaging; do not ship personal media paths
 or an installation's edited configuration. No video or FFmpeg binary is bundled.
+
+## Maintaining native build profiles
+
+Edit one file under `src/profiles/iidx<major>/<edition>-<YYYYMMDD>.rs` for each
+verified DLL. Use the release date and edition (`010` / 120 Hz arcade,
+`012` / 60 Hz arcade); do not substitute the PE timestamp for a release date.
+Use `unknown` when an edition has not been established. Currently:
+
+- `iidx33/010-20260819.rs`: verified 010/TDJ edition, using the release identity
+  associated with this DLL's PE identifier.
+- `iidx34/010-20260916.rs`: hash `3755...fe83`; historical display label
+  `IIDX 34 / 20260917` is retained for existing diagnostics.
+- `iidx34/010-20260917.rs`: hash `c98e...6534`, including the primitive-padding
+  workaround. No 012 binary has been added by this reorganization.
+
+Each `native_entries` row puts the function name, hexadecimal RVA and 16-byte
+entry guard together. The same file specifies the complete layout, vtable
+hooks and surface data. These are Rust definitions, not strings containing
+JSON. Rust `#[path]` declarations in `profile.rs` allow the requested hyphenated
+filenames while keeping ordinary Rust module identifiers.
+
+For a new build, copy the closest profile as a starting point, analyze the
+actual DLL, record its full hash and ABI/lifetime evidence, then update all
+relevant addresses/guards/layouts and register its module in `supported()`.
+An unchanged date-family ABI is a hypothesis to check, not a compatibility
+rule. Shared native adapters remain reusable across verified builds; a changed
+calling convention or lifetime requires a corresponding adapter change.
+
+Build `iidxbg-tool` before running the Python native verification scripts.
+They obtain JSON from the tool's `profiles` command, which exports the same
+Rust definitions embedded in the plugin. `scripts/native_profiles.py` selects
+the newest local debug/release tool and rejects a tool older than the profile
+sources. Set `IIDXBG_TOOL` to choose an explicit tool path. No game DLL is loaded
+by the export command. Exported JSON is diagnostic output, not a second source
+of offsets to edit or commit.
+
+Migration verification (2026-10-24): both debug and release `profiles` exports
+exactly matched every field of all three pre-migration JSON profiles, including
+the pending primitive-padding workaround. Core tests passed (49 passed, 3
+environment-dependent tests ignored), as did formatting, Clippy with warnings
+denied, the release build and DLL smoke check. Native, surface, origin and
+frame-character verification passed against each of the three exact binaries;
+private-mapping attachment passed on 010-20260917. No new RVAs or ABI assumptions
+were introduced. Actual in-game testing was not performed for this refactor;
+the build was not deployed.
 
 ## GitHub builds
 

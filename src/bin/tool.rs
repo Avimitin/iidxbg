@@ -15,6 +15,9 @@ fn main() {
 fn run() -> iidxbg::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("profiles") if args.len() == 2 => {
+            println!("{}", serde_json::to_string_pretty(&profile::supported())?);
+        }
         #[cfg(windows)]
         Some("live-check") if args.len() == 5 => {
             use std::time::{Duration, Instant};
@@ -151,7 +154,7 @@ fn run() -> iidxbg::Result<()> {
         }
         _ => {
             eprintln!(
-                "iidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>\niidxbg-tool live-check <room-id> <output-directory> <seconds>"
+                "iidxbg-tool profiles\niidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>\niidxbg-tool live-check <room-id> <output-directory> <seconds>"
             );
             std::process::exit(2);
         }

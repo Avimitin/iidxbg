@@ -2,7 +2,7 @@
 
 Recorded 2026-10-21 using IDA/Hex-Rays, PE vtables, and Capstone disassembly.
 Input: `D:\Share\chart-requester\analysis\bm2dx.dll`.
-Build label: **33 / 20260812**; file size **18,467,992**.
+Build label: **33 / 010-20260819**; file size **18,467,992**.
 SHA-256: `c61b6dcb8894062e56d60da8ca90053b27f129e1a8e8da5e54457aa42602397d`.
 Preferred base `0x180000000`; image size `0xbb95000`.
 All code/data addresses below are **RVAs**, object offsets are decimal,

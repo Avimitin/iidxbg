@@ -10,3 +10,5 @@
 /iidxbg/
 
 /tools/video-bench/target/
+
+__pycache__/

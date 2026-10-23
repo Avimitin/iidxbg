@@ -2,10 +2,56 @@
 
 Recorded 2026-10-20 using IDA/Hex-Rays, MSVC RTTI, PE exception boundaries and
 Capstone. Input `D:\Share\chart-requester\analysis\bm2dx.dll`, build label
-IIDX 33 / 20260812, 18,467,992 bytes.
+IIDX 33 / 010-20260819, 18,467,992 bytes.
 SHA-256 `c61b6dcb8894062e56d60da8ca90053b27f129e1a8e8da5e54457aa42602397d`.
 Image base `0x180000000`, image size `0xbb95000`.
 All addresses below are RVAs; object offsets are decimal.
+
+## Edition identification (2026-10-24)
+
+The input above is the **010 / TDJ / 120 Hz** edition. Its profile is now
+`src/profiles/iidx33/010-20260819.rs`. This identifies the edition of the
+already-supported hash; it introduces no new offsets, ABI or lifetime assumptions.
+
+Read-only PE inspection found:
+
+- COFF timestamp `0x6A713632`, decoded as **2026-08-04 00:45:38 UTC**;
+  entry-point RVA `0xB1CCCC`. Together these form patch identity
+  `LDJ-6a713632_b1cccc`. A compilation timestamp is not a release date.
+- The PE debug directory's CodeView/RSDS record is at RVA `0xECDEAC`
+  (file offset `0xECCAAC`, size 97). Its embedded PDB path starts at RVA
+  `0xECDEC4` and reads
+  `C:\work\33\ReleaseTDJ\build\ReleaseTDJ\bm2dx_x64ReleaseTDJ\out\bm2dx.pdb`.
+- The DLL has a manifest resource (type 24), but no VERSIONINFO resource
+  (type 16). No literal `20260812` string was found. The ordinary PE headers
+  do not directly contain an edition/release-date tuple.
+- The local sp2xpatcher reference at commit
+  `d407a55bc36d43b66aaf46aff8d93fad800ff1bb`, file
+  `patches/LDJ-6a713632_b1cccc.json`, identifies the edition as **010** and
+  describes TDJ as 010/120 Hz versus LDJ as 012/60 Hz. Its mode-selection
+  original byte `03` at file offset `0xA59227` matches this DLL. This is the
+  immediate at RVA `0xA59E27` in instruction `mov dword ptr [r14], 3`
+  at `0xA59E24`, inside function `0xA59D90..0xA5A01E`. This corroborates
+  the embedded TDJ build name; the instruction was inspected, not patched.
+
+**Corrected release identity:** the canonical profile and display label now use
+**010-20260819**, matching the database entry for this DLL's PE identity. This
+supersedes the project's former `20260812` label at the user's request. The
+release date is obtained from that identity mapping, not a literal release-date
+field in the PE header. Selection still requires the full SHA-256 above, not
+the date label or the PE identifier. The external chart-requester source path
+quoted elsewhere retains its historical `b20260812` directory name.
+
+To reproduce, parse the exact input with `pefile.PE`, inspect
+`FILE_HEADER.TimeDateStamp`, `OPTIONAL_HEADER.AddressOfEntryPoint`, resource
+type IDs and each `DIRECTORY_ENTRY_DEBUG` entry whose `Type == 2`; decode its
+RSDS payload after the 24-byte signature/GUID/age prefix. Compare the mode
+byte at the recorded file offset and disassemble from the recorded function
+start with Capstone. The metadata file SHA-256 at inspection was
+`ec581d667f8d04d2a74e24ee4b122122a606e6d127f97d5b884ddaee663c543b`.
+No game execution, game DLL modification or in-game testing was performed.
+
+## Results hook evidence
 
 | RVA | Evidence |
 |---|---|
@@ -46,7 +92,7 @@ constructor/destructor so it does not access that manager field itself.
 
 Scene background offset and cleanup slot differ from 34 (+256/14 versus
 +264/17). Reusing 34's addresses or layout would be invalid. The independent
-`src/profiles/iidx33-20260812.json` records all called native entries and the
+`src/profiles/iidx33/010-20260819.rs` records all called native entries and the
 three modified vtable slots. File identity and live guards are required.
 
 The shared lifecycle is documented in [IIDX 34](iidx34-analysis.md): original

@@ -1,9 +1,16 @@
 use crate::{Error, Result};
-use serde::Deserialize;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-#[derive(Deserialize)]
+#[path = "profiles/iidx33/010-20260819.rs"]
+mod iidx33_010_20260819;
+#[path = "profiles/iidx34/010-20260916.rs"]
+mod iidx34_010_20260916;
+#[path = "profiles/iidx34/010-20260917.rs"]
+mod iidx34_010_20260917;
+
+#[derive(Serialize)]
 pub struct Profile {
     pub label: String,
     pub sha256: String,
@@ -15,7 +22,7 @@ pub struct Profile {
     pub tables: Vec<Table>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize)]
 pub struct Layout {
     pub scene_vtable: usize,
     pub scene_background: usize,
@@ -23,7 +30,7 @@ pub struct Layout {
     pub background_movie: usize,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize)]
 pub struct Guard {
     pub rva: usize,
     pub hex: String,
@@ -44,7 +51,7 @@ impl Guard {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize)]
 pub struct Table {
     pub rva: usize,
     pub slot: usize,
@@ -53,11 +60,34 @@ pub struct Table {
 
 pub fn supported() -> [Profile; 3] {
     [
-        include_str!("profiles/iidx33-20260812.json"),
-        include_str!("profiles/iidx34-20260917.json"),
-        include_str!("profiles/iidx34-010-0917.json"),
+        iidx33_010_20260819::profile(),
+        iidx34_010_20260916::profile(),
+        iidx34_010_20260917::profile(),
     ]
-    .map(|json| serde_json::from_str(json).expect("embedded profile"))
+}
+
+fn offsets(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
+    entries
+        .iter()
+        .map(|&(name, rva)| (name.into(), rva))
+        .collect()
+}
+
+// Keep the RVA and its guard together in each build file, so a new native
+// function cannot accidentally be added to the address map without a guard.
+fn native_entries(entries: &[(&str, usize, &str)]) -> (BTreeMap<String, usize>, Vec<Guard>) {
+    let rvas = entries
+        .iter()
+        .map(|&(name, rva, _)| (name.into(), rva))
+        .collect();
+    let guards = entries
+        .iter()
+        .map(|&(_, rva, hex)| Guard {
+            rva,
+            hex: hex.into(),
+        })
+        .collect();
+    (rvas, guards)
 }
 
 fn select_hash(hash: &str) -> Result<Profile> {

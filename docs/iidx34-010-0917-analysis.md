@@ -14,7 +14,7 @@ executable, not automatic support inferred from the version number.
   SizeOfImage `0xc5ff000`, entry RVA `0xb02b7c`.
 - Label **IIDX 34 / 010-0917**; patch identity `LDJ-6aab51c7_b02b7c`,
   sp2xpatcher version **2026-09-17 (010)**; contract file
-  `src/profiles/iidx34-010-0917.json`.
+  `src/profiles/iidx34/010-20260917.rs`.
 
 The previously supported IIDX 34 hash `3755...fe83` has patch identity
 `LDJ-6aa23d57_b02b3c`, sp2xpatcher version **2026-09-16 (010)**, a 2026-09-10 PE
@@ -167,7 +167,7 @@ authoritative.
 Implementation evidence: the runtime hooks
 `premium_area_ctor` (`0x6447a0`), `concentration_apply` (`0x6375c0`) and
 `concentration_show` (`0x6377f0`), plus the layer getter `0x638420`. Exact entry
-bytes are embedded in `src/profiles/iidx34-010-0917.json`.
+bytes are embedded in `src/profiles/iidx34/010-20260917.rs`.
 
 The premium replacement is an owned sprite created at the native priority and
 kept across scenes. Both the base layer and the customization sprite are hidden

@@ -6,7 +6,7 @@ AFP imports are mocked for the getter/setter emulation.
 """
 import argparse
 import hashlib
-import json
+from native_profiles import load_profile
 import struct
 from pathlib import Path
 
@@ -20,9 +20,7 @@ from unicorn.x86_const import UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, \
 def verify(path):
     raw = path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
-    root = Path(__file__).resolve().parent.parent
-    profile = next(p for path in (root / "src/profiles").glob("*.json")
-                   if (p := json.loads(path.read_text()))["sha256"] == digest)
+    profile = load_profile(digest)
     pe = pefile.PE(data=raw)
     base = pe.OPTIONAL_HEADER.ImageBase
     assert base == 0x180000000

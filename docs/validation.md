@@ -3,7 +3,7 @@
 Latest results image/video implementation and live-test details are recorded
 in **Results image/video follow-up — 2026-10-23** at the end of this file.
 
-Scope: Windows x64 standalone plugin, known IIDX 33 / 20260812 and
+Scope: Windows x64 standalone plugin, known IIDX 33 / 010-20260819 and
 IIDX 34 / 20260917 profiles. No running game was used for this initial validation;
 later user-confirmed IIDX 33 results are recorded below.
 

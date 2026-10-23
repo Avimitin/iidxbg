@@ -36,7 +36,22 @@ scene +256 and cleanup slot 14; both inspected IIDX 34 builds use +264 and slot
 17. Runtime code does not infer these from a version number or scatter version
 conditionals through the image pipeline. Unknown builds fail attachment and
 leave the game untouched. Profiles are embedded in the DLL; they are not
-user-editable runtime JSON.
+user-editable runtime data.
+
+Build definitions live in `src/profiles/iidx<major>/<edition>-<YYYYMMDD>.rs`.
+The edition is `010` (120 Hz arcade) or `012` (60 Hz arcade), and the date is
+the recorded DLL release date, not an assumed PE compilation timestamp.
+An unverified edition is explicitly named `unknown`. Each Rust file owns its
+SHA-256, image size, native RVAs paired with entry guards, vtable slots and
+object offsets. `profile.rs` registers the files and supplies shared types;
+`iidxbg-tool profiles` exports them for the offline verification scripts.
+There is no separately maintained JSON offset table.
+
+Release dates organize evidence; they do not select an ABI. A date update can
+reuse the existing adapter after checking the relevant signatures, layouts and
+ownership against the new binary. A major-version change does not necessarily
+change every ABI either: reuse is based on the inspected functions. Incompatible
+signatures require a different adapter rather than a different address alone.
 
 The inspected builds share the Microsoft x64 callback signatures and the
 64-byte AFP texture wrapper layout, so they use the same native adapter.

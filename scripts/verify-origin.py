@@ -5,7 +5,7 @@ Checks RCX/XMM1/XMM2 arguments, AFP origin/dirty properties and fractional cente
 """
 import argparse
 import hashlib
-import json
+from native_profiles import load_profile
 from pathlib import Path
 import struct
 
@@ -19,9 +19,7 @@ parser.add_argument("dll", type=Path)
 args = parser.parse_args()
 data = args.dll.read_bytes()
 digest = hashlib.sha256(data).hexdigest()
-profiles = Path(__file__).resolve().parent.parent / "src/profiles"
-profile = next(p for path in profiles.glob("*.json")
-               if (p := json.loads(path.read_text()))["sha256"] == digest)
+profile = load_profile(digest)
 pe = pefile.PE(data=data)
 base = pe.OPTIONAL_HEADER.ImageBase
 rva = profile["rvas"]["set_origin_pixels"]
