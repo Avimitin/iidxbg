@@ -1027,3 +1027,25 @@ release builds passed. Updated local/remote configuration app SHA-256:
 `871a1a435c5036b6fc6df3261ddcdf9f5966e57cac2aecbe6c48ec08757ce747`.
 The game was not restarted for this fix. Updated binaries and the clean template
 are packaged in `dist/iidxbg-codec-fix-windows-x64.zip`.
+
+## Pre-release verification loop — 2026-10-23
+
+Actual in-game testing was repeated using the committed media implementation,
+DLL SHA-256 `cdb2f52ec7b9162d8f1e3b62336e0cc2b1232ec2a85984d097c35b2826201a5a`,
+on the same exact game input SHA-256
+`c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534`.
+The release version bump does not change these rendering paths or native RVAs.
+
+Two guest Standard SP visits played Caramel Pain ANOTHER 8, ending FAILED/F.
+The user's H.264 clip advanced behind selection and the target graph, and both
+result visits displayed the video with native score information intact. Native
+LIFT&SUDDEN+ was enabled. Because the user's clip has black margins, a second
+pass temporarily used the diagnostic pattern for the shared LIFT/SUDDEN+/graph
+source. Both covers visibly changed; LIFT advanced from 0.833/frame 25 to
+5.000/frame 150. All three sprites shared descriptor `0xc57e9f58` (priorities
+108, 108 and 145). No decoder/native fault was logged during these visits.
+
+Evidence: `target/verification-20261023/` contains selection/gameplay/result
+capture pairs and `plugin.log`. The user's clip was restored to the remote
+configuration after testing, and the game was left on the moving result screen.
+No new high-grade video, DP/player-2 or forced device-reset coverage is claimed.
