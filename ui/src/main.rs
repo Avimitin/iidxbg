@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod artwork;
 mod bilibili;
 mod editor;
 mod gallery;
 mod preview;
+mod scanner;
 mod store;
 mod theme;
 mod widgets;

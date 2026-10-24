@@ -271,7 +271,40 @@ failure follows the provider's existing deferred retry and stock fallback.
 
 Last-lease release stops reads and drains queued files (an in-flight bounded
 HTTP request can finish first). Next activation requests a fresh URL and current
-live group. Premium is session-global and therefore stays active across scenes;
+live group. Premium stays active across scenes only while its native source layer is alive;
+source retirement invalidates saved handles and blocks rebuilding until a new
+constructor establishes ownership (see iidx34-idle-premium.md);
 concentration releases playback on native hide, while retaining a descriptor
 for any native clip without a restorable archive/name pair. Original archive
 bindings survive subsequent media changes. GPU ownership/reset stays unchanged.
+
+
+## Named artwork adapters (2026-10-24)
+
+The inspected IIDX34 010-20260917 build adds a searchable artwork catalog and
+independent `[[artwork]]` selections. Presets cover notes, shell, decision and
+transition pieces; the catalog covers named atlas regions, untextured GE2D,
+loose PNG/JPEG resources (`@file`) and the main gameplay movie (`@movie/main`).
+The exact supporting afp-utils hash and live guards additionally gate GE2D.
+No version-label inference, archive rewriting, font replacement or model-geometry
+replacement is performed. The UI retains the adjacent irregular native-aspect
+mosaic and scrolling, with a separate catalog page and per-resource source editor.
+
+Loader observers record identity metadata only. The worker prepares owned pixels
+and video sessions. The graphics owner composites configured atlas regions once
+per pixel revision and swaps through the native replacement table; normal draws
+then use the resulting texture. Static work uses a revision fast path. The GE2D
+adapter owns converted geometry and supplies a temporary native work view whose
+contents are synchronously copied into the native queue. Loose files use their
+separate threaded loader and direct-handle binder; a matched bind substitutes
+an owned prepared texture after preserving the original call. Retirement serials
+prevent old prepared data from following reused direct handles. All native/GPU
+lifetimes, limitations and performance measurements are documented in
+[iidx34-custom-art.md](iidx34-custom-art.md).
+
+Video uploads are shared by bound consumers; each changed destination atlas can
+still require composition. Main-movie substitution preserves the original movie
+decoder for fallback, so it does not eliminate its CPU workload. Configuration
+preparation currently covers enabled entries at scene events, including entries
+whose archives are not loaded. Configure only desired resources and use bindings
+for common media; the catalog itself does not enable or decode every listed item.

@@ -208,7 +208,7 @@ impl AppView {
         });
     }
     fn set_surface_source(&mut self, surface: Surface, source: Source, cx: &mut Context<Self>) {
-        let old = self.store.config().for_surface(surface);
+        let old = self.editor_config().for_surface(surface);
         self.commit_surface(0, cx, |doc| {
             store::set_string(
                 doc,
@@ -234,7 +234,7 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let source = self.store.config().for_surface(surface).source;
+        let source = self.editor_config().for_surface(surface).source;
         if self.commit_surface(0, cx, |doc| {
             let path = ["sources", surface.name(), "bind"];
             if let Some(target) = target {
@@ -255,7 +255,12 @@ impl AppView {
                 }
             }
         }) {
-            self.editor = Some(SurfaceEditor::new(surface, self.store.config(), window, cx));
+            self.editor = Some(SurfaceEditor::new(
+                surface,
+                &self.editor_config(),
+                window,
+                cx,
+            ));
         }
     }
 }
@@ -303,10 +308,11 @@ pub(crate) fn render_editor(
     cx: &mut Context<AppView>,
 ) -> AnyElement {
     let surface = editor.surface;
-    let config = view.store.config().clone();
+    let config = view.editor_config();
     let c = config.for_surface(surface);
     let root = config.binding_root(surface).unwrap_or(surface);
     let bound = root != surface;
+    let custom_artwork = view.artwork_editor;
     let mut body = v_flex()
         .id("surface-settings")
         .w_full()
@@ -321,6 +327,33 @@ pub(crate) fn render_editor(
         .or_else(|| view.store.error().map(|e| e.to_owned().into()))
     {
         body = body.child(widgets::error_banner(error));
+    }
+    if let Some(index) = custom_artwork {
+        let art = &view.store.config().artwork[index];
+        body = body.child(
+            div()
+                .text_base()
+                .child(format!("{} / {}", art.archive, art.texture)),
+        );
+        if !art.texture.starts_with("@shape/") && art.archive != "@movie" {
+            body = body.child(
+                h_flex().gap_3().child("保留原素材透明轮廓").child(
+                    Switch::new("artwork-mask")
+                        .checked(art.native_mask)
+                        .on_change(cx.listener(move |view, checked, _, cx| {
+                            view.store.edit(|doc| {
+                                if let Some(t) = doc["artwork"]
+                                    .as_array_of_tables_mut()
+                                    .and_then(|a| a.get_mut(index))
+                                {
+                                    t.insert("native_mask", toml_edit::value(*checked));
+                                }
+                            });
+                            cx.notify();
+                        })),
+                ),
+            );
+        }
     }
     let mut bindings = h_flex().gap_3().flex_wrap().child(
         widgets::segment_button("bind-independent", "独立设置", !bound).on_click(
@@ -556,8 +589,12 @@ pub(crate) fn render_editor(
                                 "",
                             );
                         });
-                        view.editor =
-                            Some(SurfaceEditor::new(surface, view.store.config(), window, cx));
+                        view.editor = Some(SurfaceEditor::new(
+                            surface,
+                            &view.editor_config(),
+                            window,
+                            cx,
+                        ));
                     })),
                 );
             }
@@ -619,31 +656,33 @@ pub(crate) fn render_editor(
                     cx,
                 ));
         }
-        let mut fit = h_flex()
-            .gap_3()
-            .child(div().text_base().child("图片适配（视频拉伸）"));
-        for (value, label) in [
-            (Fit::Cover, "裁切铺满"),
-            (Fit::Contain, "完整显示 + 模糊边缘"),
-        ] {
-            fit = fit.child(
-                widgets::segment_button(
-                    SharedString::from(format!("fit-{}", store::fit_key(value))),
-                    label,
-                    c.image.fit == value,
-                )
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    view.commit_surface(0, cx, |doc| {
-                        store::set_string(
-                            doc,
-                            &["sources", surface.name(), "fit"],
-                            store::fit_key(value),
-                        )
-                    });
-                })),
-            );
+        if custom_artwork.is_none() {
+            let mut fit = h_flex()
+                .gap_3()
+                .child(div().text_base().child("图片适配（视频拉伸）"));
+            for (value, label) in [
+                (Fit::Cover, "裁切铺满"),
+                (Fit::Contain, "完整显示 + 模糊边缘"),
+            ] {
+                fit = fit.child(
+                    widgets::segment_button(
+                        SharedString::from(format!("fit-{}", store::fit_key(value))),
+                        label,
+                        c.image.fit == value,
+                    )
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.commit_surface(0, cx, |doc| {
+                            store::set_string(
+                                doc,
+                                &["sources", surface.name(), "fit"],
+                                store::fit_key(value),
+                            )
+                        });
+                    })),
+                );
+            }
+            body = body.child(fit);
         }
-        body = body.child(fit);
     }
     if surface == Surface::SongSelect {
         body = body
@@ -667,10 +706,37 @@ pub(crate) fn render_editor(
                 "角色图片",
                 true,
                 cx,
-            ));
+            ))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted_ink())
+                    .child("提供透明背景的人物图片即可；自动去除透明空白，并适配原生角色位置。"),
+            );
     }
     body = body.child(div().text_sm().text_color(theme::muted_ink()).child("自动保存。下次进入组件时生效；随机媒体在一次访问中保持不变。视频静音循环，预览显示首帧。"))
         .child(Button::new("refresh-preview").large().outline().label("刷新预览").on_click(cx.listener(move |view, _, _, cx| view.refresh_surface(surface, cx))));
+    if custom_artwork.is_some() {
+        if view.catalog.preview_loading {
+            body = body.child(div().child("正在准备素材预览…"));
+        }
+        if let Some(error) = &view.catalog.preview_error {
+            body = body.child(div().child(error.clone()));
+        }
+        if let Some(image) = &view.catalog.preview {
+            body = body.child(
+                div()
+                    .text_sm()
+                    .child("媒体预览；游戏内按原素材尺寸裁切，并保留原生动画。"),
+            );
+            body = body.child(
+                gpui::img(image.clone())
+                    .w_full()
+                    .max_h(px(260.))
+                    .object_fit(gpui::ObjectFit::Contain),
+            );
+        }
+    }
     div()
         .id("surface-editor-overlay")
         .absolute()
@@ -706,11 +772,11 @@ pub(crate) fn render_editor(
                         .border_b_1()
                         .border_color(theme::line())
                         .child(
-                            div()
-                                .flex_1()
-                                .text_2xl()
-                                .font_semibold()
-                                .child(theme::surface_title(surface)),
+                            div().flex_1().text_2xl().font_semibold().child(
+                                view.artwork_editor
+                                    .map(|index| view.store.config().artwork[index].texture.clone())
+                                    .unwrap_or_else(|| theme::surface_title(surface).to_owned()),
+                            ),
                         )
                         .child(
                             Switch::new("surface-enabled")

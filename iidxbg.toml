@@ -98,7 +98,7 @@ frame_chara_image = ''
 # Each enabled surface chooses independently. Settings above are inherited unless
 # overridden below. Decode, blur and downloads all run on the image worker.
 # A saved edit takes effect after the next query, on a new selection visit/chart.
-# Results has its own switch; all seven switches are independent.
+# Results has its own switch; all surface switches are independent.
 [surfaces]
 results = true
 # Background behind song-selection UI (not the song's gameplay BGA).
@@ -118,6 +118,16 @@ premium_area = false
 # concentration source section below stays empty; add an override there to use
 # a different source. Also IIDX 34 / 010-0917 only.
 concentration = false
+# Named-artwork presets for the inspected IIDX 34 / 010-0917 build.
+note_skin = false
+gameplay_shell = false
+decision = false
+transition = false
+title = false
+login = false
+mode_select = false
+gameplay_bottom = false
+logout = false
 
 # Per-surface overrides are active by default. Edit each background below.
 # Local folders live under iidxbg; download folders under iidxbg/downloads.
@@ -126,9 +136,8 @@ concentration = false
 # Fixed file example in any sources section:
 #   source = "file"
 #   media_path = 'D:\Videos\background.mp4'
-# Local videos are silent loops, stretched to the native canvas (max 1920x1080).
-# File/folder video playback: results, song_select, sudden_plus, lift, target_graph.
-# Premium/concentration use the first frame as a static image.
+# Local videos are silent loops fitted to the selected surface canvas.
+# Premium Area and concentration also support video and live playback.
 # Bind example under [sources.sudden_plus]: bind = "lift"
 # Compatible binding groups: results/song_select; sudden_plus/lift/target_graph;
 # premium_area/concentration. Cycles are rejected. The target switch can be off.
@@ -213,3 +222,10 @@ save_directory = 'iidxbg/downloads/premium-area'
 # premium-area image. Add any field below (for example local_directory) to
 # prepare an independent image for concentrate mode.
 [sources.concentration]
+
+# Additional presets use the same per-surface source and binding controls.
+# Configure them in the GUI, or add [sources.title], [sources.login],
+# [sources.mode_select], [sources.gameplay_bottom], [sources.logout],
+# [sources.note_skin], [sources.gameplay_shell], [sources.decision],
+# or [sources.transition]. Omitted settings inherit the defaults above.
+# The All Assets page scans the installation only when Scan is clicked.

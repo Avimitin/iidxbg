@@ -4,14 +4,19 @@ import pathlib
 import subprocess
 
 root = pathlib.Path(__file__).resolve().parent.parent
-metadata = json.loads(subprocess.check_output(
-    ["cargo", "metadata", "--locked", "--format-version", "1"], cwd=root))
+packages = {}
+for manifest in (root / "Cargo.toml", root / "ui/Cargo.toml"):
+    metadata = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--locked", "--format-version", "1",
+         "--manifest-path", str(manifest), "--filter-platform", "x86_64-pc-windows-msvc"], cwd=root))
+    for package in metadata["packages"]:
+        packages[package["id"]] = package
 output = ["iidxbg third-party dependencies\n",
           "Generated from Cargo.lock; includes transitive and platform dependencies.\n",
           "Build/verification and SDK scaffolding adapted from MIT-licensed bilimani.\n"
           "Its copyright and permission notice are retained in LICENSE.\n"]
-for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version"])):
-    if package["name"] == "iidxbg":
+for package in sorted(packages.values(), key=lambda p: (p["name"], p["version"])):
+    if package["name"] in ("iidxbg", "iidxbg-config"):
         continue
     directory = pathlib.Path(package["manifest_path"]).parent
     output.append(f"\n{'=' * 72}\n{package['name']} {package['version']}\n"
@@ -29,5 +34,7 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
     for path in sorted(files):
         output.append(f"\n--- {path.relative_to(directory)} ---\n"
                       f"{path.read_text(encoding='utf-8', errors='replace')}\n")
-(root / "THIRD-PARTY-NOTICES.txt").write_text("\n".join(output), encoding="utf-8")
-print(f"Notices generated for {len(metadata['packages']) - 1} dependencies.")
+output.append((root / "licenses/ifs-reader.txt").read_text("utf-8"))
+notice = "\n".join(line.rstrip() for line in "\n".join(output).splitlines()) + "\n"
+(root / "THIRD-PARTY-NOTICES.txt").write_text(notice, encoding="utf-8")
+print(f"Notices generated for {len(packages) - 2} dependencies and the IFS reader references.")

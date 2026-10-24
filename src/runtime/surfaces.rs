@@ -2,6 +2,7 @@
 use super::*;
 use crate::media::{Asset, Playback};
 use minhook::MinHook;
+mod artwork;
 
 #[derive(Default)]
 pub(super) struct Bundle {
@@ -11,6 +12,8 @@ pub(super) struct Bundle {
     graph: Option<Asset>,
     premium_area: Option<Asset>,
     concentration: Option<Asset>,
+    artwork: [Option<Asset>; 4],
+    scenes: [Option<Asset>; 3],
 }
 
 static LATEST: Mutex<Option<Arc<Bundle>>> = Mutex::new(None);
@@ -26,6 +29,7 @@ static PREMIUM_FAULTS: AtomicU32 = AtomicU32::new(0);
 
 /// Worker publishes already decoded, independently sourced surface canvases.
 pub(super) fn publish(images: &[Option<Asset>; Surface::COUNT]) {
+    artwork::changed();
     *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Bundle {
         select: images[Surface::SongSelect.index()].clone(),
         upper: images[Surface::SuddenPlus.index()].clone(),
@@ -33,10 +37,31 @@ pub(super) fn publish(images: &[Option<Asset>; Surface::COUNT]) {
         graph: images[Surface::TargetGraph.index()].clone(),
         premium_area: images[Surface::PremiumArea.index()].clone(),
         concentration: images[Surface::Concentration.index()].clone(),
+        scenes: [Surface::Login, Surface::ModeSelect, Surface::Logout]
+            .map(|s| images[s.index()].clone()),
+        artwork: [
+            Surface::NoteSkin,
+            Surface::GameplayShell,
+            Surface::Decision,
+            Surface::Transition,
+        ]
+        .map(|surface| images[surface.index()].clone()),
     }));
 }
 
+pub(super) fn profile_artwork(enabled: bool) {
+    artwork::PROFILE.store(enabled, Ordering::Relaxed);
+}
+pub(super) fn artwork_result_visit(owner: usize, enter: bool) {
+    artwork::result_visit(owner, enter);
+}
+
+pub(super) fn publish_artwork(artwork: Vec<(crate::config::Artwork, Option<Asset>)>) {
+    artwork::publish(artwork);
+}
+
 pub(super) fn publish_character(image: Option<Arc<Prepared>>) {
+    artwork::changed();
     *CHARACTER_IMAGE.lock().unwrap_or_else(|e| e.into_inner()) = image;
 }
 
@@ -262,6 +287,11 @@ impl FrameChara {
             unsafe { self.hide(n, scene) };
             return;
         }
+        // This build replaces the native character texture in its animated
+        // geometry. The older root-canvas adapter must not hide that geometry.
+        if n.profile.rvas.contains_key("artwork_dispatch") {
+            return;
+        }
         if !self.attempted
             && let Some(image) = &self.image
         {
@@ -375,6 +405,7 @@ struct Sprite {
 static MEDIA: Mutex<Vec<std::sync::Weak<GpuMedia>>> = Mutex::new(Vec::new());
 struct GpuMedia {
     identity: Arc<Prepared>,
+    dynamic: bool,
     texture: Arc<Texture>,
     playback: Mutex<Playback>,
     failed: AtomicBool,
@@ -397,6 +428,7 @@ impl GpuMedia {
         let playback = asset.play();
         let texture = Arc::new(unsafe { Texture::upload(n, &playback.pixels) }?);
         let shared = Arc::new(Self {
+            dynamic: matches!(asset, Asset::Video(_)),
             identity,
             texture,
             playback: Mutex::new(playback),
@@ -668,9 +700,8 @@ struct PremiumArea {
 
 impl PremiumArea {
     unsafe fn observe(&mut self, n: &Native, object: usize, priority: u32) {
-        if self.object == object {
-            return;
-        }
+        // Construction establishes a fresh lifetime even when the allocator
+        // reuses the same object address.
         // A new owner replaces our previous nodes without dereferencing them.
         self.sprite = None;
         self.hidden = [None, None];
@@ -693,6 +724,13 @@ impl PremiumArea {
     }
 
     unsafe fn refresh(&mut self, n: &Native, bundle: Option<Arc<Bundle>>, enabled: bool) {
+        // Native pool retirement can destroy the source layer as well as our
+        // sprite. Do not read a transform from its recycled address. Retire GPU
+        // state here on the graphics owner; only a fresh constructor re-arms it.
+        if self.base == 0 && self.custom == 0 {
+            unsafe { self.restore(n) };
+            return;
+        }
         let asset = bundle
             .as_ref()
             .and_then(|b| b.premium_area.clone())
@@ -798,7 +836,25 @@ impl PremiumArea {
         }
     }
 
+    fn retire_source(&mut self, node: usize) -> bool {
+        if node == 0 || (node != self.base && node != self.custom) {
+            return false;
+        }
+        self.base = 0;
+        self.custom = 0;
+        // These handles belong to the retiring native lifetime. Never restore
+        // their saved visibility into a subsequently recycled AFP node.
+        self.hidden = [None, None];
+        self.pending = false;
+        true
+    }
+
     unsafe fn released(&mut self, _n: &Native, node: usize) -> Option<Arc<Texture>> {
+        if self.retire_source(node) {
+            event(Event::Diag(
+                "premium area native source retired; waiting for constructor".into(),
+            ));
+        }
         if let Some(sprite) = &mut self.sprite
             && sprite.node == node
         {
@@ -1321,6 +1377,7 @@ impl Surfaces {
 }
 
 pub(super) fn invalidate() {
+    artwork::invalidate();
     if let Some(mut s) = state() {
         unsafe { s.invalidate() };
     } else {
@@ -1705,7 +1762,11 @@ unsafe extern "system" fn movie_draw(this: usize) -> usize {
             }
         }
     });
-    if drawn { 0 } else { unsafe { f(this) } }
+    if drawn {
+        0
+    } else {
+        unsafe { artwork::draw_movie(this, f) }
+    }
 }
 
 #[repr(C)]
@@ -2063,6 +2124,7 @@ unsafe extern "system" fn graph_storage_release(this: usize) {
 /// Native scene/group/pool cleanup can retire a sprite independently of its
 /// owner. Observe the common release function before its slot becomes reusable.
 unsafe extern "system" fn sprite_release(this: usize) {
+    artwork::released(this);
     let mut texture = None;
     boundary(|| {
         if let Some(mut s) = state() {
@@ -2288,9 +2350,17 @@ pub(super) fn attach(n: &Native) -> Result<()> {
         }
     }
     let mut created = Vec::new();
+    artwork::hooks(n, &mut hooks);
     let mut trampolines = Vec::new();
-    for (name, detour) in hooks {
-        let target = (n.base + n.profile.rvas[name]) as *mut c_void;
+    let mut targets: Vec<_> = hooks
+        .into_iter()
+        .map(|(name, detour)| (name, n.base + n.profile.rvas[name], detour))
+        .collect();
+    if let Some(hook) = artwork::library_hook(n) {
+        targets.push(hook);
+    }
+    for (name, address, detour) in targets {
+        let target = address as *mut c_void;
         match unsafe { MinHook::create_hook(target, detour.cast_mut().cast()) } {
             Ok(original) => {
                 created.push(target);
@@ -2594,5 +2664,38 @@ mod character_tests {
         // Non-finite native geometry must keep stock art instead of panicking.
         MOCK.with(|m| m.borrow_mut().fail = true);
         assert!(unsafe { read_transform(&n, 42) }.is_none());
+    }
+}
+
+#[cfg(test)]
+mod premium_lifetime_tests {
+    use super::*;
+
+    #[test]
+    fn native_retirement_discards_both_saved_handles_and_blocks_rebuild() {
+        let mut area = PremiumArea {
+            object: 100,
+            base: 200,
+            custom: 300,
+            hidden: [
+                Some(NativeClip {
+                    handle: 42,
+                    visible: 1,
+                }),
+                None,
+            ],
+            pending: true,
+            ..Default::default()
+        };
+        assert!(!area.retire_source(0));
+        assert!(!area.retire_source(400));
+        assert_eq!(area.base, 200);
+        assert!(area.retire_source(200));
+        assert_eq!((area.base, area.custom), (0, 0));
+        assert!(area.hidden.iter().all(Option::is_none));
+        assert!(!area.pending);
+        // Keep the owner marker so the next graphics tick disposes our sprite.
+        assert_eq!(area.object, 100);
+        assert!(!area.retire_source(300));
     }
 }

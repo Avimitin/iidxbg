@@ -162,6 +162,27 @@ fn prepare(config_path: &Path, target: Surface) -> Result<Prepared, String> {
     provider.prepare().map_err(|error| describe(&error))
 }
 
+fn artwork_config(config: &Config, index: usize) -> Result<Config, String> {
+    let art = config
+        .artwork
+        .get(index)
+        .ok_or("Artwork entry no longer exists")?;
+    let mut resolved = match art.source.bind {
+        Some(surface) => config.for_surface(surface),
+        None => config.for_artwork(art),
+    };
+    // A preview is allowed before enabling a replacement in the game.
+    resolved.enabled = true;
+    Ok(resolved)
+}
+
+pub(crate) fn prepare_artwork(config_path: &Path, index: usize) -> Result<Prepared, String> {
+    let config = Config::load(config_path).map_err(|error| describe(&error))?;
+    let mut provider =
+        Provider::new(artwork_config(&config, index)?).map_err(|error| describe(&error))?;
+    provider.prepare().map_err(|error| describe(&error))
+}
+
 fn describe(error: &iidxbg::Error) -> String {
     match error {
         iidxbg::Error::NoImages => "没有找到可用的 PNG/JPEG 图片".into(),
@@ -248,6 +269,24 @@ mod tests {
         };
         let rendered = render_image(prepared);
         assert_eq!(rendered.as_bytes(0), Some(&[0, 0, 255, 255][..]));
+    }
+
+    #[test]
+    fn artwork_preview_uses_its_source_dimensions_and_explicit_binding() {
+        let mut config = Config::parse(&format!("{FIXTURE}\n[[artwork]]\narchive='@file'\ntexture='assistant.png'\nnative_size=[128,150]\n[artwork.source]\nsource='file'\nmedia_path='portrait.png'\n")).unwrap();
+        config.sources.transition.media_path = Some("unrelated.png".into());
+        let resolved = artwork_config(&config, 0).unwrap();
+        assert_eq!(resolved.media_path, PathBuf::from("portrait.png"));
+        assert_eq!((resolved.image.width, resolved.image.height), (128, 150));
+        assert!(resolved.image.resource);
+        config.sources.decision.source = Some(Source::File);
+        config.sources.decision.media_path = Some("bound.mp4".into());
+        config.artwork[0].source.bind = Some(Surface::Decision);
+        assert_eq!(
+            artwork_config(&config, 0).unwrap().media_path,
+            PathBuf::from("bound.mp4")
+        );
+        assert!(artwork_config(&config, 1).is_err());
     }
 
     #[test]

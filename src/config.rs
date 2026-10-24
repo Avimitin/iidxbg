@@ -41,6 +41,36 @@ pub struct Config {
     /// Optional silent local video for ordinary song results. Empty uses images.
     #[serde(default)]
     pub results_video: PathBuf,
+    #[serde(default)]
+    pub artwork: Vec<Artwork>,
+    #[serde(default)]
+    pub profile_artwork: bool,
+}
+
+/// A named image within an AFP archive. Native geometry and timelines stay intact.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Artwork {
+    pub archive: String,
+    pub texture: String,
+    /// Catalog dimensions bound decode/upload work to the native resource size.
+    #[serde(default)]
+    pub native_size: Option<[u32; 2]>,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub source: SourceOverride,
+    /// Retain the native silhouette; disable for arbitrary transparent cutouts.
+    #[serde(default = "default_mask")]
+    pub native_mask: bool,
+    /// Internal preset scene gate; never accepted from or written to TOML.
+    #[serde(skip)]
+    pub(crate) scene_scope: Option<Surface>,
+    #[serde(skip)]
+    pub(crate) bottom_crop: bool,
+}
+fn default_mask() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -69,10 +99,19 @@ pub enum Surface {
     TargetGraph,
     PremiumArea,
     Concentration,
+    NoteSkin,
+    GameplayShell,
+    Decision,
+    Transition,
+    Title,
+    Login,
+    ModeSelect,
+    GameplayBottom,
+    Logout,
 }
 
 impl Surface {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 16] = [
         Self::Results,
         Self::SongSelect,
         Self::SuddenPlus,
@@ -80,6 +119,15 @@ impl Surface {
         Self::TargetGraph,
         Self::PremiumArea,
         Self::Concentration,
+        Self::NoteSkin,
+        Self::GameplayShell,
+        Self::Decision,
+        Self::Transition,
+        Self::Title,
+        Self::Login,
+        Self::ModeSelect,
+        Self::GameplayBottom,
+        Self::Logout,
     ];
     pub const COUNT: usize = Self::ALL.len();
     /// Native canvas of the IIDX 34 premium-area and concentration backgrounds.
@@ -97,6 +145,15 @@ impl Surface {
             Self::TargetGraph => "target_graph",
             Self::PremiumArea => "premium_area",
             Self::Concentration => "concentration",
+            Self::NoteSkin => "note_skin",
+            Self::GameplayShell => "gameplay_shell",
+            Self::Decision => "decision",
+            Self::Transition => "transition",
+            Self::Title => "title",
+            Self::Login => "login",
+            Self::ModeSelect => "mode_select",
+            Self::GameplayBottom => "gameplay_bottom",
+            Self::Logout => "logout",
         }
     }
 
@@ -104,7 +161,17 @@ impl Surface {
     pub fn can_bind(self, target: Self) -> bool {
         fn group(surface: Surface) -> u8 {
             match surface {
-                Surface::Results | Surface::SongSelect => 0,
+                Surface::Results
+                | Surface::SongSelect
+                | Surface::GameplayShell
+                | Surface::Decision
+                | Surface::Transition
+                | Surface::Title
+                | Surface::Login
+                | Surface::ModeSelect
+                | Surface::GameplayBottom
+                | Surface::Logout => 0,
+                Surface::NoteSkin => 3,
                 Surface::SuddenPlus | Surface::Lift | Surface::TargetGraph => 1,
                 Surface::PremiumArea | Surface::Concentration => 2,
             }
@@ -123,6 +190,15 @@ pub struct Sources {
     pub target_graph: SourceOverride,
     pub premium_area: SourceOverride,
     pub concentration: SourceOverride,
+    pub note_skin: SourceOverride,
+    pub gameplay_shell: SourceOverride,
+    pub decision: SourceOverride,
+    pub transition: SourceOverride,
+    pub title: SourceOverride,
+    pub login: SourceOverride,
+    pub mode_select: SourceOverride,
+    pub gameplay_bottom: SourceOverride,
+    pub logout: SourceOverride,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -184,6 +260,15 @@ pub struct Surfaces {
     pub target_graph: bool,
     pub premium_area: bool,
     pub concentration: bool,
+    pub note_skin: bool,
+    pub gameplay_shell: bool,
+    pub decision: bool,
+    pub transition: bool,
+    pub title: bool,
+    pub login: bool,
+    pub mode_select: bool,
+    pub gameplay_bottom: bool,
+    pub logout: bool,
 }
 
 impl Default for Surfaces {
@@ -196,6 +281,15 @@ impl Default for Surfaces {
             target_graph: false,
             premium_area: false,
             concentration: false,
+            note_skin: false,
+            gameplay_shell: false,
+            decision: false,
+            transition: false,
+            title: false,
+            login: false,
+            mode_select: false,
+            gameplay_bottom: false,
+            logout: false,
         }
     }
 }
@@ -339,6 +433,9 @@ impl MoebooruDomain {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Image {
+    /// Resource textures retain aspect and alpha; set by the adapter, not TOML.
+    #[serde(skip)]
+    pub resource: bool,
     pub width: u32,
     pub height: u32,
     pub fit: Fit,
@@ -379,7 +476,19 @@ impl Config {
             &mut value.sources.target_graph,
             &mut value.sources.premium_area,
             &mut value.sources.concentration,
-        ] {
+            &mut value.sources.note_skin,
+            &mut value.sources.gameplay_shell,
+            &mut value.sources.decision,
+            &mut value.sources.transition,
+            &mut value.sources.title,
+            &mut value.sources.login,
+            &mut value.sources.mode_select,
+            &mut value.sources.gameplay_bottom,
+            &mut value.sources.logout,
+        ]
+        .into_iter()
+        .chain(value.artwork.iter_mut().map(|art| &mut art.source))
+        {
             for path in [
                 &mut source.media_path,
                 &mut source.local_directory,
@@ -402,6 +511,33 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         self.validate_base()?;
+        if self.artwork.len() > 512 {
+            return Err(Error::Config("at most 512 custom artwork entries"));
+        }
+        let mut keys = std::collections::HashSet::new();
+        for art in &self.artwork {
+            if art
+                .native_size
+                .is_some_and(|size| size.iter().any(|v| *v == 0 || *v > 16384))
+            {
+                return Err(Error::Config("invalid artwork native dimensions"));
+            }
+            if art.archive.is_empty()
+                || art.archive.len() > 255
+                || art.archive.contains(['\\', '\0'])
+                || art.archive.starts_with('/')
+                || art.archive.split('/').any(|p| p == "..")
+                || art.texture.is_empty()
+                || art.texture.len() > 255
+                || art.texture.contains('\0')
+            {
+                return Err(Error::Config("invalid artwork archive/texture name"));
+            }
+            if !keys.insert((&art.archive, &art.texture)) {
+                return Err(Error::Config("duplicate artwork archive/texture"));
+            }
+            self.for_artwork(art).validate_base()?;
+        }
         if !self.results_video.as_os_str().is_empty()
             && (self.image.width > 1920 || self.image.height > 1080)
         {
@@ -412,6 +548,25 @@ impl Config {
             self.for_surface(surface).validate_base()?;
         }
         Ok(())
+    }
+
+    pub fn for_artwork(&self, art: &Artwork) -> Self {
+        let mut base = self.clone();
+        base.artwork.clear();
+        base.sources.transition = art.source.clone();
+        // Explicit bindings share the selected module's prepared media at runtime.
+        base.sources.transition.bind = None;
+        base.surfaces.transition = art.enabled;
+        let mut config = base.for_unbound_surface(Surface::Transition);
+        config.image.resource = true;
+        if let Some([width, height]) = art.native_size {
+            let scale = (1920. / width.max(1) as f64)
+                .min(1080. / height.max(1) as f64)
+                .min(1.);
+            config.image.width = (width as f64 * scale).round().max(2.) as u32;
+            config.image.height = (height as f64 * scale).round().max(2.) as u32;
+        }
+        config
     }
 
     pub fn for_surface(&self, surface: Surface) -> Self {
@@ -430,6 +585,15 @@ impl Config {
             Surface::TargetGraph => &self.sources.target_graph,
             Surface::PremiumArea => &self.sources.premium_area,
             Surface::Concentration => &self.sources.concentration,
+            Surface::NoteSkin => &self.sources.note_skin,
+            Surface::GameplayShell => &self.sources.gameplay_shell,
+            Surface::Decision => &self.sources.decision,
+            Surface::Transition => &self.sources.transition,
+            Surface::Title => &self.sources.title,
+            Surface::Login => &self.sources.login,
+            Surface::ModeSelect => &self.sources.mode_select,
+            Surface::GameplayBottom => &self.sources.gameplay_bottom,
+            Surface::Logout => &self.sources.logout,
         }
     }
 
@@ -462,6 +626,15 @@ impl Config {
                 Surface::TargetGraph => self.surfaces.target_graph,
                 Surface::PremiumArea => self.surfaces.premium_area,
                 Surface::Concentration => self.surfaces.concentration,
+                Surface::NoteSkin => self.surfaces.note_skin,
+                Surface::GameplayShell => self.surfaces.gameplay_shell,
+                Surface::Decision => self.surfaces.decision,
+                Surface::Transition => self.surfaces.transition,
+                Surface::Title => self.surfaces.title,
+                Surface::Login => self.surfaces.login,
+                Surface::ModeSelect => self.surfaces.mode_select,
+                Surface::GameplayBottom => self.surfaces.gameplay_bottom,
+                Surface::Logout => self.surfaces.logout,
             }
     }
 
@@ -475,6 +648,15 @@ impl Config {
             Surface::TargetGraph => &self.sources.target_graph,
             Surface::PremiumArea => &self.sources.premium_area,
             Surface::Concentration => &self.sources.concentration,
+            Surface::NoteSkin => &self.sources.note_skin,
+            Surface::GameplayShell => &self.sources.gameplay_shell,
+            Surface::Decision => &self.sources.decision,
+            Surface::Transition => &self.sources.transition,
+            Surface::Title => &self.sources.title,
+            Surface::Login => &self.sources.login,
+            Surface::ModeSelect => &self.sources.mode_select,
+            Surface::GameplayBottom => &self.sources.gameplay_bottom,
+            Surface::Logout => &self.sources.logout,
         };
         c.sources = Sources::default();
         c.enabled &= match surface {
@@ -485,6 +667,15 @@ impl Config {
             Surface::TargetGraph => self.surfaces.target_graph,
             Surface::PremiumArea => self.surfaces.premium_area,
             Surface::Concentration => self.surfaces.concentration,
+            Surface::NoteSkin => self.surfaces.note_skin,
+            Surface::GameplayShell => self.surfaces.gameplay_shell,
+            Surface::Decision => self.surfaces.decision,
+            Surface::Transition => self.surfaces.transition,
+            Surface::Title => self.surfaces.title,
+            Surface::Login => self.surfaces.login,
+            Surface::ModeSelect => self.surfaces.mode_select,
+            Surface::GameplayBottom => self.surfaces.gameplay_bottom,
+            Surface::Logout => self.surfaces.logout,
         };
         if let Some(v) = o.source {
             c.source = v;
@@ -539,7 +730,22 @@ impl Config {
         }
         match surface {
             Surface::Results => {}
-            Surface::SongSelect => {
+            Surface::GameplayBottom => {
+                c.image.width = 622;
+                c.image.height = 300;
+            }
+            Surface::NoteSkin => {
+                c.image.width = 540;
+                c.image.height = 90;
+            }
+            Surface::SongSelect
+            | Surface::GameplayShell
+            | Surface::Decision
+            | Surface::Transition
+            | Surface::Title
+            | Surface::Login
+            | Surface::ModeSelect
+            | Surface::Logout => {
                 c.image.width = 1920;
                 c.image.height = 1080;
             }
@@ -570,8 +776,9 @@ impl Config {
     fn validate_base(&self) -> Result<()> {
         self.bilibili.validate()?;
         self.moebooru.validate()?;
-        if !(64..=3840).contains(&self.image.width)
-            || !(64..=2160).contains(&self.image.height)
+        let minimum = if self.image.resource { 2 } else { 64 };
+        if !(minimum..=3840).contains(&self.image.width)
+            || !(minimum..=2160).contains(&self.image.height)
             || !(1..=64).contains(&self.image.max_download_mb)
             || !(1..=64_000_000).contains(&self.image.max_source_pixels)
         {
@@ -867,5 +1074,81 @@ mod tests {
         let c = Config::load(&root.join("default.toml")).unwrap();
         assert_eq!(c.local_directory, root.join("iidxbg"));
         assert_eq!(c.moebooru.save_directory, root.join("iidxbg/downloads"));
+    }
+}
+#[cfg(test)]
+mod artwork_tests {
+    use super::*;
+    #[test]
+    fn tiny_artwork_uses_resource_limits_without_relaxing_surface_limits() {
+        let base = include_str!("../tests/fixtures/default.toml");
+        let c = Config::parse(&format!(
+            "{base}\n[[artwork]]\narchive='0/common.ifs'\ntexture='tiny'\nnative_size=[1,16]\n"
+        ))
+        .unwrap();
+        let resource = c.for_artwork(&c.artwork[0]);
+        assert_eq!((resource.image.width, resource.image.height), (2, 16));
+        assert!(resource.validate_base().is_ok());
+        let mut ordinary = c;
+        ordinary.image.width = 2;
+        assert!(ordinary.validate().is_err());
+    }
+
+    #[test]
+    #[ignore = "requires the private catalog; set IIDXBG_ARTWORK_CATALOG"]
+    fn every_catalog_entry_is_configurable() {
+        let path = std::env::var_os("IIDXBG_ARTWORK_CATALOG").expect("IIDXBG_ARTWORK_CATALOG");
+        let entries: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut config = Config::parse(include_str!("../tests/fixtures/default.toml")).unwrap();
+        for entry in &entries {
+            config.artwork = vec![Artwork {
+                scene_scope: None,
+                bottom_crop: false,
+                archive: entry["archive"].as_str().unwrap().into(),
+                texture: entry["texture"].as_str().unwrap().into(),
+                native_size: Some([
+                    entry["width"].as_u64().unwrap() as u32,
+                    entry["height"].as_u64().unwrap() as u32,
+                ]),
+                enabled: false,
+                source: SourceOverride::default(),
+                native_mask: true,
+            }];
+            config
+                .validate()
+                .unwrap_or_else(|error| panic!("{entry}: {error}"));
+        }
+        assert!(!entries.is_empty());
+        eprintln!("Validated all {} catalog configurations", entries.len());
+    }
+    #[test]
+    fn named_artwork_is_strict_independent_and_resolves_paths() {
+        let base = include_str!("../tests/fixtures/default.toml");
+        let entry = "\n[[artwork]]\narchive='gmframe34.ifs'\ntexture='lane_base'\nenabled=true\n[artwork.source]\nsource='file'\nmedia_path='custom.png'\n";
+        let c = Config::parse(&format!("{base}{entry}")).unwrap();
+        assert_eq!(c.artwork.len(), 1);
+        assert!(c.artwork[0].native_mask);
+        assert_eq!(c.for_artwork(&c.artwork[0]).source, Source::File);
+        assert_eq!(
+            c.for_artwork(&c.artwork[0]).media_path,
+            PathBuf::from("custom.png")
+        );
+        assert!(Config::parse(&format!("{base}{entry}{entry}")).is_err());
+        assert!(
+            Config::parse(&format!(
+                "{base}{}",
+                entry.replace("gmframe34.ifs", "../gmframe34.ifs")
+            ))
+            .is_err()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, format!("{base}{entry}")).unwrap();
+        let c = Config::load(&path).unwrap();
+        assert_eq!(
+            c.artwork[0].source.media_path,
+            Some(dir.path().join("custom.png"))
+        );
     }
 }

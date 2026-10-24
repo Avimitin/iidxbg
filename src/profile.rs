@@ -20,6 +20,16 @@ pub struct Profile {
     pub rvas: BTreeMap<String, usize>,
     pub guards: Vec<Guard>,
     pub tables: Vec<Table>,
+    pub artwork_library: Option<LibraryProfile>,
+}
+
+#[derive(Serialize)]
+pub struct LibraryProfile {
+    pub name: String,
+    pub sha256: String,
+    pub image_size: usize,
+    pub rvas: BTreeMap<String, usize>,
+    pub guards: Vec<Guard>,
 }
 
 #[derive(Serialize)]
@@ -191,6 +201,15 @@ mod tests {
             for g in p.guards {
                 assert_eq!(hex::decode(g.hex).unwrap().len(), 16);
                 assert!(g.rva + 16 < p.image_size);
+            }
+            if let Some(library) = p.artwork_library {
+                for rva in library.rvas.values() {
+                    assert!(library.guards.iter().any(|g| g.rva == *rva));
+                }
+                for guard in library.guards {
+                    assert_eq!(hex::decode(guard.hex).unwrap().len(), 16);
+                    assert!(guard.rva + 16 < library.image_size);
+                }
             }
         }
     }

@@ -51,10 +51,13 @@ struct ScanCache {
     paths: Vec<PathBuf>,
 }
 
+pub type PreparedArtwork = Vec<(crate::config::Artwork, Option<Asset>)>;
+
 /// Independent repeat histories and HTTP policies; only the image worker owns this.
 pub struct Providers {
     config: Config,
     providers: [Provider; Surface::COUNT],
+    artwork: Vec<(crate::config::Artwork, Provider, Option<Asset>)>,
 }
 
 impl Providers {
@@ -68,7 +71,15 @@ impl Providers {
             .map(|s| Provider::new(config.for_surface(s)))
             .collect::<Result<Vec<_>>>()?;
         let providers = providers.try_into().ok().expect("one provider per surface");
-        Ok(Self { config, providers })
+        let artwork = crate::presets::artwork(&config)
+            .iter()
+            .map(|art| Ok((art.clone(), Provider::new(config.for_artwork(art))?, None)))
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            config,
+            providers,
+            artwork,
+        })
     }
 
     pub fn reload(&mut self, path: &Path) -> Result<bool> {
@@ -80,8 +91,49 @@ impl Providers {
         for (new, old) in replacement.providers.iter_mut().zip(&mut self.providers) {
             new.previous = old.previous.take();
         }
+        for (art, provider, image) in &mut replacement.artwork {
+            if let Some((_, old, previous)) = self
+                .artwork
+                .iter_mut()
+                .find(|(a, _, _)| a.archive == art.archive && a.texture == art.texture)
+            {
+                provider.previous = old.previous.take();
+                *image = previous.take();
+            }
+        }
         *self = replacement;
         Ok(true)
+    }
+
+    /// Worker-only: arbitrary named assets use the same provider policy/cache.
+    pub fn prepare_artwork(
+        &mut self,
+        shared: &[Option<Asset>; Surface::COUNT],
+    ) -> (PreparedArtwork, Vec<String>) {
+        let mut errors = Vec::new();
+        let assets = self
+            .artwork
+            .iter_mut()
+            .map(|(art, provider, previous)| {
+                if !self.config.enabled || !art.enabled {
+                    *previous = None;
+                } else if let Some(surface) = art.source.bind {
+                    *previous = shared
+                        [self.config.binding_root(surface).unwrap_or(surface).index()]
+                    .clone();
+                } else {
+                    match provider.prepare_media() {
+                        Ok(asset) => *previous = Some(asset),
+                        Err(error) => errors.push(format!(
+                            "artwork {}/{}: {error}; retaining previous media",
+                            art.archive, art.texture
+                        )),
+                    }
+                }
+                (art.clone(), previous.clone())
+            })
+            .collect();
+        (assets, errors)
     }
 
     pub fn enabled(&self, surface: Surface) -> bool {
@@ -585,6 +637,8 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                // Windows accepted sockets can inherit the listener's mode.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
@@ -641,7 +695,7 @@ mod tests {
         for surface in Surface::ALL {
             let folder = root.join(surface.name());
             fs::create_dir_all(&folder).unwrap();
-            image::RgbImage::from_pixel(64, 64, image::Rgb([20 * surface.index() as u8, 90, 200]))
+            image::RgbImage::from_pixel(64, 64, image::Rgb([12 * surface.index() as u8, 90, 200]))
                 .save(folder.join("image.png"))
                 .unwrap();
         }
@@ -664,7 +718,7 @@ mod tests {
             .replace("lift = false", "lift = true")
             .replace("target_graph = false", "target_graph = true")
             .replace("premium_area = false", "premium_area = true")
-            .replace("concentration = false", "concentration = true");
+            .replace("concentration = false", "concentration = true\nnote_skin = true\ngameplay_shell = true\ndecision = true\ntransition = true\ntitle = true\nlogin = true\nmode_select = true\ngameplay_bottom = true\nlogout = true");
         fs::write(&path, &text).unwrap();
         let mut bank = Providers::new(Config::load(&path).unwrap()).unwrap();
         for surface in Surface::ALL {
@@ -675,7 +729,7 @@ mod tests {
                     .join("image.png")
                     .to_string_lossy()
             );
-            assert_eq!(p.bgra[2], 20 * surface.index() as u8);
+            assert_eq!(p.bgra[2], 12 * surface.index() as u8);
         }
         let changed = text.replace("local_directory = 'lift'", "local_directory = 'missing'");
         fs::write(&path, &changed).unwrap();

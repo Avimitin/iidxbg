@@ -66,6 +66,61 @@ impl ConfigStore {
         self.commit()
     }
 
+    pub(crate) fn artwork_document(&self, index: usize) -> DocumentMut {
+        let mut doc = self.doc.clone();
+        let art = &self.config.artwork[index];
+        let source = self.doc["artwork"]
+            .as_array_of_tables()
+            .and_then(|a| a.get(index))
+            .and_then(|t| t.get("source"))
+            .cloned()
+            .unwrap_or(Item::Table(Table::new()));
+        table_mut(&mut doc, &["sources"]).insert("transition", source);
+        set_value(&mut doc, &["surfaces", "transition"], art.enabled.into());
+        doc
+    }
+    pub(crate) fn edit_artwork(
+        &mut self,
+        index: usize,
+        edit: impl FnOnce(&mut DocumentMut),
+    ) -> bool {
+        let mut draft = self.artwork_document(index);
+        edit(&mut draft);
+        let source = draft["sources"]["transition"].clone();
+        let enabled = draft["surfaces"]["transition"].clone();
+        self.edit(|doc| {
+            if let Some(table) = doc["artwork"]
+                .as_array_of_tables_mut()
+                .and_then(|a| a.get_mut(index))
+            {
+                table.insert("source", source);
+                table.insert("enabled", enabled);
+            }
+        })
+    }
+    pub(crate) fn add_artwork(&mut self, archive: &str, texture: &str) -> Option<usize> {
+        if let Some(index) = self
+            .config
+            .artwork
+            .iter()
+            .position(|a| a.archive == archive && a.texture == texture)
+        {
+            return Some(index);
+        }
+        let index = self.config.artwork.len();
+        self.edit(|doc| {
+            if !doc.contains_key("artwork") {
+                doc["artwork"] = Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+            }
+            let mut table = Table::new();
+            table.insert("archive", toml_edit::value(archive));
+            table.insert("texture", toml_edit::value(texture));
+            table.insert("enabled", toml_edit::value(false));
+            doc["artwork"].as_array_of_tables_mut().unwrap().push(table);
+        })
+        .then_some(index)
+    }
+
     fn commit(&mut self) -> bool {
         let text = self.doc.to_string();
         let parsed = match Config::parse(&text) {
@@ -250,6 +305,15 @@ pub fn surface_switch_value(config: &Config, surface: Surface) -> bool {
         Surface::TargetGraph => config.surfaces.target_graph,
         Surface::PremiumArea => config.surfaces.premium_area,
         Surface::Concentration => config.surfaces.concentration,
+        Surface::NoteSkin => config.surfaces.note_skin,
+        Surface::GameplayShell => config.surfaces.gameplay_shell,
+        Surface::Decision => config.surfaces.decision,
+        Surface::Transition => config.surfaces.transition,
+        Surface::Title => config.surfaces.title,
+        Surface::Login => config.surfaces.login,
+        Surface::ModeSelect => config.surfaces.mode_select,
+        Surface::GameplayBottom => config.surfaces.gameplay_bottom,
+        Surface::Logout => config.surfaces.logout,
     }
 }
 
@@ -514,5 +578,35 @@ mod tests {
         }
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();
+    }
+}
+#[cfg(test)]
+mod artwork_tests {
+    use super::*;
+    #[test]
+    fn named_editor_does_not_change_transition_or_discard_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, include_str!("../../tests/fixtures/default.toml")).unwrap();
+        let mut store = ConfigStore::load(&path).unwrap();
+        let original = store.config().sources.transition.clone();
+        let index = store.add_artwork("gmframe34.ifs", "lane_base").unwrap();
+        assert!(store.edit_artwork(index, |doc| {
+            set_value(doc, &["sources", "transition", "source"], "file".into());
+            set_value(
+                doc,
+                &["sources", "transition", "media_path"],
+                "chosen.mp4".into(),
+            );
+            set_value(doc, &["surfaces", "transition"], true.into());
+        }));
+        assert_eq!(store.config().sources.transition, original);
+        assert!(store.config().artwork[index].enabled);
+        assert_eq!(
+            store.config().artwork[index].source.media_path,
+            Some(PathBuf::from("chosen.mp4"))
+        );
+        assert_eq!(store.add_artwork("gmframe34.ifs", "lane_base"), Some(index));
+        assert_eq!(store.config().artwork.len(), 1);
     }
 }

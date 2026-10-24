@@ -23,6 +23,10 @@ if ($SdkRoot) {
     if (-not $include -or -not $kernel -or -not $ucrt) { throw 'Incomplete SDK layout' }
     $env:LIB = "$($kernel.DirectoryName);$($ucrt.DirectoryName);$env:LIB"
     $env:INCLUDE = "$($include.FullName)\ucrt;$($include.FullName)\shared;$($include.FullName)\um;$env:INCLUDE"
+    $resourceCompiler = Join-Path $SdkRoot "microsoft.windows.sdk.cpp\c\bin\$($include.Name)\x64\rc.exe"
+    if (Test-Path -LiteralPath $resourceCompiler) {
+        $env:PATH = "$(Split-Path $resourceCompiler);$env:PATH"
+    }
 }
 Push-Location (Split-Path $PSScriptRoot)
 try {

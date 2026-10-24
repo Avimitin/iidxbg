@@ -6,13 +6,17 @@ binary; the plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
 
 ## What it does
 
-- One page with seven surface tiles; no sidebar or global-options page.
+- Icon sidebar for display components, Bilibili login and all artwork.
+- Scrollable adjacent mosaic with sixteen independent components, including
+  title, login, mode selection, gameplay bottom frame and logout summary.
+- All artwork has an on-demand installation scan, a visible cache path and an
+  Open Cache Directory button. No scan runs merely from opening the page.
 - Every surface, including results, has an independent enable switch.
 - Choose a fixed image/video, a random folder, a compatible Moebooru API, or a
   local/API mix. Native file/folder pickers write paths into the selected surface.
 - Compatible surfaces can bind to another surface. SUDDEN+, LIFT and target graph
   share one selected file, decoder session and GPU descriptor when bound.
-  Results/selection form a separate group; premium/concentration remain static.
+  Compatible wide backgrounds form another group; premium/concentration can bind.
   Cycles are rejected before saving. Unbinding restores independent settings.
 - Built-in Konachan/Yande.re endpoints and custom post.json URLs are supported.
   Custom APIs may use explicitly listed CDN hostnames. API downloads remain images.

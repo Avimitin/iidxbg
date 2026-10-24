@@ -26,7 +26,8 @@ pub fn decode(bytes: &[u8], config: &Image, label: String) -> Result<Prepared> {
     decode_with_canvas(bytes, config, label, false)
 }
 
-/// A character cutout keeps alpha and uses transparent padding, never blurred fill.
+/// A character cutout keeps alpha and removes empty margins. The native sprite
+/// supplies placement; user artwork never needs a pre-positioned screen canvas.
 pub fn decode_character(bytes: &[u8], config: &Image, label: String) -> Result<Prepared> {
     let mut config = config.clone();
     config.width = 1920;
@@ -57,31 +58,70 @@ fn decode_with_canvas(
     reader.limits(limits);
     let source = reader.decode()?;
     let canvas = if character {
-        let foreground = source.resize(config.width, config.height, imageops::FilterType::Triangle);
-        let mut canvas = RgbaImage::new(config.width, config.height);
-        imageops::overlay(
-            &mut canvas,
-            &foreground,
-            i64::from((config.width - foreground.width()) / 2),
-            i64::from((config.height - foreground.height()) / 2),
-        );
-        canvas
+        let rgba = source.into_rgba8();
+        let [left, top, right, bottom] =
+            character_bounds(&rgba).ok_or(Error::Config("character image is fully transparent"))?;
+        let cropped = imageops::crop_imm(&rgba, left, top, right - left, bottom - top).to_image();
+        DynamicImage::ImageRgba8(cropped)
+            .resize(config.width, config.height, imageops::FilterType::Triangle)
+            .into_rgba8()
+    } else if config.resource {
+        source
+            .resize(
+                config.width.min(w),
+                config.height.min(h),
+                imageops::FilterType::Triangle,
+            )
+            .into_rgba8()
     } else {
         fit_canvas(&source, config.width, config.height, config.fit)
     };
+    let (width, height) = canvas.dimensions();
     let mut bgra = canvas.into_raw();
     for p in bgra.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
-        if !character {
+        if !character && !config.resource {
             p[3] = 255;
         }
     }
     Ok(Prepared {
         label,
-        width: config.width,
-        height: config.height,
+        width,
+        height,
         bgra,
     })
+}
+
+fn character_bounds(image: &RgbaImage) -> Option<[u32; 4]> {
+    let mut bounds = [image.width(), image.height(), 0, 0];
+    for (x, y, pixel) in image.enumerate_pixels() {
+        if pixel[3] != 0 {
+            bounds[0] = bounds[0].min(x);
+            bounds[1] = bounds[1].min(y);
+            bounds[2] = bounds[2].max(x + 1);
+            bounds[3] = bounds[3].max(y + 1);
+        }
+    }
+    (bounds[2] > bounds[0] && bounds[3] > bounds[1]).then_some(bounds)
+}
+
+/// Worker-only compatibility canvas for older native root-sprite adapters.
+pub fn character_canvas(image: Prepared) -> Prepared {
+    let source =
+        RgbaImage::from_raw(image.width, image.height, image.bgra).expect("prepared pixels");
+    let mut canvas = RgbaImage::new(1920, 1080);
+    imageops::overlay(
+        &mut canvas,
+        &source,
+        i64::from((1920 - source.width()) / 2),
+        i64::from((1080 - source.height()) / 2),
+    );
+    Prepared {
+        label: image.label,
+        width: 1920,
+        height: 1080,
+        bgra: canvas.into_raw(),
+    }
 }
 
 /// Worker-only derivative; channel order does not affect the resize filter.
@@ -150,6 +190,14 @@ mod tests {
     use super::*;
     use image::Rgba;
     #[test]
+    fn character_bounds_ignore_empty_padding_and_keep_faint_edges() {
+        let mut image = RgbaImage::new(100, 100);
+        assert_eq!(character_bounds(&image), None);
+        image.put_pixel(37, 12, Rgba([255, 20, 30, 1]));
+        image.put_pixel(50, 80, Rgba([255, 20, 30, 255]));
+        assert_eq!(character_bounds(&image), Some([37, 12, 51, 81]));
+    }
+    #[test]
     fn contain_blurs_only_the_margin_and_keeps_foreground_sharp() {
         let source = RgbaImage::from_fn(64, 32, |x, _| {
             if x % 2 == 0 {
@@ -196,6 +244,7 @@ mod tests {
         let mut bytes = Cursor::new(Vec::new());
         src.write_to(&mut bytes, ImageFormat::Png).unwrap();
         let mut cfg = Image {
+            resource: false,
             width: 4,
             height: 4,
             fit: Fit::Contain,
@@ -214,5 +263,37 @@ mod tests {
             Err(Error::Limit)
         ));
         assert!(decode(b"not a picture", &cfg, "".into()).is_err());
+    }
+
+    #[test]
+    fn resource_decode_preserves_alpha_and_aspect_without_upscaling() {
+        let source = DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 4, Rgba([210, 30, 10, 64])));
+        let mut bytes = Cursor::new(Vec::new());
+        source.write_to(&mut bytes, ImageFormat::Png).unwrap();
+        let config = Image {
+            resource: true,
+            width: 4,
+            height: 4,
+            fit: Fit::Cover,
+            max_download_mb: 1,
+            max_source_pixels: 32,
+        };
+        let pixels = decode(bytes.get_ref(), &config, "resource".into()).unwrap();
+        assert_eq!((pixels.width, pixels.height), (4, 2));
+        assert!(
+            pixels
+                .bgra
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [10, 30, 210, 64])
+        );
+        let larger = Image {
+            width: 128,
+            height: 128,
+            ..config
+        };
+        let pixels = decode(bytes.get_ref(), &larger, "resource".into()).unwrap();
+        assert_eq!((pixels.width, pixels.height), (8, 4));
     }
 }

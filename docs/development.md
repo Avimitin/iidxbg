@@ -139,3 +139,72 @@ dimension wrapper with mocked AFP imports. Requires pefile, capstone and unicorn
 this does not execute the game or validate rendering. Rust tests additionally
 exercise owner retirement/restoration, geometry arguments, transparent image
 reload and scene-request config acceptance without HTTP/game calls.
+
+## Named artwork catalog
+
+The exact IIDX34 010-20260917 adapter can replace named atlas regions and
+untextured GE2D shape fills without editing game archives. Use the configuration
+UI's third sidebar page (artwork catalog), click **Scan game assets**, search by
+archive/region name and choose media. Entries start disabled. Native shapes,
+animation, draw order and masks still belong to the game. A resource used in
+several places changes everywhere it is used. The @movie/main entry targets the
+main gameplay movie. Fonts and model geometry are not image resources.
+
+Scanning is opt-in: opening the page or starting the application never scans.
+The EXE detects `data/graphic` beside the configuration's `modules` directory;
+otherwise a folder picker requests the installation or `graphic` directory.
+An in-process Rust worker reads IFS/binary XML, maps hashed texture/AFP geometry
+names, crops texture regions, draws GE2D fill previews, and indexes loose images.
+No Python, ifstools installation, or game launch is needed. Progress is shown;
+click the same button to cancel. The previous catalog remains until completion.
+
+The generated catalog loads automatically and is remembered for the next launch.
+Caches live under `%LOCALAPPDATA%/iidxbg/asset-cache/<installation-hash>/scanner-v2/`.
+The All Assets page always displays the expanded cache root and an **Open cache
+folder** button. Users can clear files there and scan again to regenerate them.
+Each source is SHA-256 checked on a requested scan. Unchanged inputs reuse catalog
+records/previews; duplicate texture and shape content shares thumbnail files.
+Only catalog records, previews and a `scan-report.json` are saved; source archives
+are not extracted or copied to the game folder. Reports include input hashes and
+unreadable/unsupported members. External `_super_` references are reported and
+skipped, matching the earlier inventory's `super_disable=True` behavior.
+Scan results identify resources, not DLL/ABI compatibility; existing exact-build
+runtime guards still apply. Fonts and 3D model geometry are not interpreted.
+Known note, shell, decision, transition and character names have bilingual search
+hints. Shape previews are approximate rasterizations, not native AFP animation.
+See [artwork-scanner.md](artwork-scanner.md) for format evidence, corpus parity
+results, input/catalog hashes, limits and reproduction commands.
+
+**Import catalog** remains available for existing catalogs. The independent Python
+tools below are also retained for analysis and reader parity checks:
+
+```powershell
+python scripts/inventory-artwork.py C:/Games/IIDX/data/graphic D:/Analysis/iidx-art
+python scripts/inventory-geometry.py D:/Analysis/iidx-art
+python scripts/build-artwork-catalog.py D:/Analysis/iidx-art
+python scripts/inventory-loose-artwork.py C:/Games/IIDX/data/graphic D:/Analysis/iidx-art
+python scripts/audit-artwork-coverage.py D:/Analysis/iidx-art
+```
+
+Import `D:/Analysis/iidx-art/catalog.json`; keep its thumbnails directory beside
+it. The first command copies archives to the local analysis directory and checks
+SHA-256. It refuses an output inside the source directory or on a UNC share.
+No archives/previews belong in the repository or release package.
+
+`native_size` limits decoding to the selected region's native dimensions (with
+an overall 1920x1080 ceiling), avoiding a full-HD upload for a tiny sprite.
+Transparent images retain their alpha. `native_mask` additionally applies the
+original texture alpha; GE2D always retains its native polygon/mask behavior.
+Bindings reuse an existing module's prepared asset, decoder and GPU source
+texture. Independent selections use independent playback even for the same URL.
+Static raster regions are composed once and then use native draws; video tiles
+are recomposed only for a newly published frame. See
+[iidx34-custom-art.md](iidx34-custom-art.md) for measured costs and limitations.
+
+Loose PNG/JPEG resources appear as `@file` entries, with a texture name relative
+to `data/graphic`. They use the same media editor and source providers. This
+covers assistant portraits, customization previews and movie thumbnails that
+are outside IFS. Native direct-handle drawing requires a matched texture bind;
+static images still upload/compose only when changed. The catalog lists readable
+resources, not proof that every resource appears in an accessible game mode.
+Unreadable inputs are recorded in the inventory with hashes and errors.

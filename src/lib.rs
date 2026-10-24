@@ -4,6 +4,7 @@ pub mod config;
 pub mod hook_chain;
 pub mod media;
 pub mod pixels;
+mod presets;
 pub mod profile;
 pub mod source;
 pub mod state;

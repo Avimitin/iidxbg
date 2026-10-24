@@ -3,6 +3,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_kit::assets::IconName;
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{Icon, Sizable, Size, StyledExt, h_flex, spinner::Spinner, v_flex};
 use gpui_kit::*;
 use iidxbg::config::Surface;
@@ -12,23 +13,14 @@ use crate::{
     store, theme, widgets,
 };
 
-const GRID_COLUMNS: f32 = 4.;
-const WIDE_RATIO: f32 = 16. / 9.;
-
-const TOP_ROW: [Surface; 4] = [
-    Surface::Results,
-    Surface::SongSelect,
-    Surface::PremiumArea,
-    Surface::Concentration,
-];
-const BOTTOM_ROW: [Surface; 3] = [Surface::SuddenPlus, Surface::Lift, Surface::TargetGraph];
+const PREVIEW_INSET: f32 = 12.;
 
 #[derive(Clone, Copy, Debug)]
-struct Region {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+pub(crate) struct Region {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
 }
 
 impl AppView {
@@ -37,48 +29,31 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let viewport = window.viewport_size();
-        // The board is deliberately full-bleed: no page padding and no hero.
-        // The custom title bar is the only chrome around it.
-        let width = (viewport.width.as_f32() - theme::SIDEBAR_WIDTH).max(320.);
-        let height = (viewport.height.as_f32() - theme::TITLE_BAR_HEIGHT).max(240.);
-        let cell_width = width / GRID_COLUMNS;
-
-        // The top band has four 16:9 tiles. Give it at least 30% of the content
-        // height so the wide surfaces get more breathing room; the remaining
-        // lower band becomes three portrait columns. The cap keeps a very short
-        // window from turning the top band into a second full-height row.
-        let top_height = (cell_width / WIDE_RATIO).clamp(height * 0.30, height * 0.38);
-        let bottom_height = height - top_height;
-
-        let mut modules = Vec::with_capacity(TOP_ROW.len() + BOTTOM_ROW.len() + 1);
-        for (column, surface) in TOP_ROW.iter().enumerate() {
-            let region = Region {
-                x: column as f32 * cell_width,
-                y: 0.,
-                width: cell_width,
-                height: top_height,
-            };
-            modules.push(self.render_surface_module(*surface, region, window, cx));
+        let width = (window.viewport_size().width.as_f32() - theme::SIDEBAR_WIDTH).max(240.);
+        let mut placed: Vec<Region> = Vec::new();
+        let mut modules = Vec::with_capacity(Surface::COUNT);
+        // Unequal panel widths form one adjoining board, not rows, columns or
+        // detached cards. A panel sits against the nearest available edge.
+        let widths = [
+            0.44, 0.56, 0.22, 0.24, 0.20, 0.40, 0.46, 0.60, 0.56, 0.44, 0.48, 0.52, 0.48, 0.55,
+            0.44, 0.50,
+        ];
+        for surface in Surface::ALL {
+            let (w, h) = theme::surface_size(self.store.config(), surface);
+            let panel_width = (width * widths[surface.index()]).max(150.).min(width);
+            let panel_height = (panel_width - PREVIEW_INSET * 2.) * h as f32 / w.max(1) as f32
+                + PREVIEW_INSET * 2.;
+            let region = adjacent_region(&placed, width, panel_width, panel_height);
+            placed.push(region);
+            modules.push(self.render_surface_module(surface, region, window, cx));
         }
-        for (column, surface) in BOTTOM_ROW.iter().enumerate() {
-            let region = Region {
-                x: column as f32 * (width / 3.),
-                y: top_height,
-                width: (width / 3.),
-                height: bottom_height,
-            };
-            modules.push(self.render_surface_module(*surface, region, window, cx));
-        }
-
+        let height = placed.iter().map(|r| r.y + r.height).fold(0_f32, f32::max);
         div()
-            .id("gallery-grid")
-            .relative()
+            .id("gallery-board")
             .size_full()
-            .overflow_hidden()
+            .overflow_y_scrollbar()
             .bg(theme::page_bg())
-            .child(grid_lines(width, height, cell_width, top_height))
-            .children(modules)
+            .child(div().relative().w_full().h(px(height)).children(modules))
             .into_any_element()
     }
 
@@ -108,7 +83,7 @@ impl AppView {
         let hovered = self.hovered_surface == Some(surface);
         let dense = region.width < 280. || region.height < 180.;
         let accent = theme::surface_accent(surface);
-        let inset = (region.width.min(region.height) * 0.025).clamp(4., 12.);
+        let inset = PREVIEW_INSET;
 
         let (status_label, status_fg, status_bg) = if enabled && error.is_some() {
             ("准备失败", theme::danger(), theme::danger_soft())
@@ -155,6 +130,8 @@ impl AppView {
             .top(px(region.y))
             .w(px(region.width))
             .h(px(region.height))
+            .border_1()
+            .border_color(theme::line())
             .overflow_hidden()
             .cursor_pointer()
             .on_hover(cx.listener(move |this, entered, _, cx| {
@@ -220,48 +197,55 @@ impl AppView {
     }
 }
 
-fn grid_lines(width: f32, height: f32, cell_width: f32, top_height: f32) -> AnyElement {
-    let mut lines = Vec::with_capacity(4);
-    for column in 1..GRID_COLUMNS as usize {
-        lines.push(
-            div()
-                .absolute()
-                .top_0()
-                .left(px(column as f32 * cell_width))
-                .w(px(1.))
-                .h(px(top_height))
-                .bg(theme::line_strong())
-                .into_any_element(),
-        );
+/// Fill the lowest exposed edge of the board. Neighbours can have different
+/// widths and heights, but no empty pocket is left between their frames.
+pub(crate) fn adjacent_region(
+    placed: &[Region],
+    board_width: f32,
+    width: f32,
+    height: f32,
+) -> Region {
+    let mut edges = vec![0., board_width];
+    for region in placed {
+        edges.extend([region.x, region.x + region.width]);
     }
-    for column in 1..3 {
-        lines.push(
-            div()
-                .absolute()
-                .top(px(top_height))
-                .left(px(column as f32 * width / 3.))
-                .w(px(1.))
-                .h(px(height - top_height))
-                .bg(theme::line_strong())
-                .into_any_element(),
-        );
+    edges.sort_by(f32::total_cmp);
+    edges.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+    let mut skyline: Vec<(f32, f32, f32)> = Vec::new();
+    for pair in edges.windows(2) {
+        let middle = (pair[0] + pair[1]) / 2.;
+        let top = placed
+            .iter()
+            .filter(|r| middle >= r.x && middle < r.x + r.width)
+            .map(|r| r.y + r.height)
+            .fold(0_f32, f32::max);
+        if let Some(last) = skyline.last_mut()
+            && (last.2 - top).abs() < 0.01
+        {
+            last.1 = pair[1];
+        } else {
+            skyline.push((pair[0], pair[1], top));
+        }
     }
-    lines.push(
-        div()
-            .absolute()
-            .top(px(top_height))
-            .left_0()
-            .w(px(width))
-            .h(px(1.))
-            .bg(theme::line_strong())
-            .into_any_element(),
-    );
-
-    div()
-        .absolute()
-        .inset_0()
-        .children(lines)
-        .into_any_element()
+    let (left, right, top) = skyline
+        .into_iter()
+        .min_by(|a, b| a.2.total_cmp(&b.2).then(a.0.total_cmp(&b.0)))
+        .expect("board always has an exposed edge");
+    let available = right - left;
+    let actual_width = if available - width < 120. {
+        available
+    } else {
+        width
+    };
+    let actual_height = (actual_width - PREVIEW_INSET * 2.) * (height - PREVIEW_INSET * 2.)
+        / (width - PREVIEW_INSET * 2.)
+        + PREVIEW_INSET * 2.;
+    Region {
+        x: left,
+        y: top,
+        width: actual_width,
+        height: actual_height,
+    }
 }
 
 fn card_status(

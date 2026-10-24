@@ -62,6 +62,9 @@ impl Default for PreviewSlot {
 pub struct AppView {
     pub(crate) bili: crate::bilibili::State,
     pub(crate) bili_page: bool,
+    pub(crate) artwork_page: bool,
+    pub(crate) artwork_editor: Option<usize>,
+    pub(crate) catalog: crate::artwork::Catalog,
     pub(crate) store: ConfigStore,
     pub(crate) editor: Option<SurfaceEditor>,
     pub(crate) previews: [PreviewSlot; Surface::COUNT],
@@ -92,6 +95,9 @@ impl AppView {
         let mut this = Self {
             bili: crate::bilibili::State::new(cx),
             bili_page: false,
+            artwork_page: false,
+            artwork_editor: None,
+            catalog: crate::artwork::Catalog::new(window, cx),
             store,
             editor: None,
             previews: std::array::from_fn(|_| PreviewSlot::default()),
@@ -113,6 +119,7 @@ impl AppView {
         })
         .detach();
 
+        this.restore_catalog(cx);
         this.schedule_preview_sync(cx, 120);
         this
     }
@@ -123,7 +130,11 @@ impl AppView {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut DocumentMut),
     ) -> bool {
-        let ok = self.store.edit(edit);
+        let ok = if let Some(index) = self.artwork_editor {
+            self.store.edit_artwork(index, edit)
+        } else {
+            self.store.edit(edit)
+        };
         if let Some(editor) = &mut self.editor {
             if ok {
                 editor.error = None;
@@ -138,6 +149,9 @@ impl AppView {
             }
         }
         if ok {
+            if self.artwork_editor.is_some() {
+                self.catalog.invalidate_preview();
+            }
             self.schedule_preview_sync(cx, delay_ms);
         }
         cx.notify();
@@ -216,6 +230,7 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.artwork_editor = None;
         self.hovered_surface = None;
         if self
             .editor
@@ -231,6 +246,7 @@ impl AppView {
 
     pub(crate) fn close_editor(&mut self, cx: &mut Context<Self>) {
         self.editor = None;
+        self.artwork_editor = None;
         cx.notify();
     }
 
@@ -328,6 +344,10 @@ impl AppView {
     }
 
     pub(crate) fn refresh_surface(&mut self, surface: Surface, cx: &mut Context<Self>) {
+        if self.artwork_editor.is_some() {
+            self.refresh_artwork_preview(cx);
+            return;
+        }
         let config = self.store.config().clone();
         if !store::effective_enabled(&config, surface) {
             return;
@@ -413,7 +433,9 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let overlay = self.render_editor_overlay(window, cx);
-        let content = if self.bili_page {
+        let content = if self.artwork_page {
+            self.render_artwork(window, cx)
+        } else if self.bili_page {
             self.render_bilibili(cx)
         } else {
             self.render_gallery(window, cx)
@@ -433,10 +455,11 @@ impl Render for AppView {
                     "page-surfaces",
                     IconName::LayoutGrid,
                     "显示组件",
-                    !self.bili_page,
+                    !self.bili_page && !self.artwork_page,
                 )
                 .on_click(cx.listener(|view, _, _, cx| {
                     view.bili_page = false;
+                    view.artwork_page = false;
                     view.editor = None;
                     cx.notify();
                 })),
@@ -450,10 +473,26 @@ impl Render for AppView {
                 )
                 .on_click(cx.listener(|view, _, _, cx| {
                     view.bili_page = true;
+                    view.artwork_page = false;
                     view.editor = None;
                     cx.notify();
                 })),
             );
+        let sidebar = sidebar.child(
+            widgets::navigation_button(
+                "page-artwork",
+                IconName::Image,
+                "全部素材",
+                self.artwork_page,
+            )
+            .on_click(cx.listener(|view, _, _, cx| {
+                view.artwork_page = true;
+                view.bili_page = false;
+                view.editor = None;
+                view.artwork_editor = None;
+                cx.notify();
+            })),
+        );
         let title_bar = TitleBar::new()
             .h(px(theme::TITLE_BAR_HEIGHT))
             .pl_6()

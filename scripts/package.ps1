@@ -17,10 +17,12 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 Copy-Item -LiteralPath $dll -Destination "$out/iidxbg.dll" -Force
 Copy-Item -LiteralPath "$root/iidxbg.toml" -Destination "$out/iidxbg.toml" -Force
 Copy-Item -LiteralPath $configGui -Destination "$out/iidxbg-config.exe" -Force
+Copy-Item -LiteralPath "$root/THIRD-PARTY-NOTICES.txt" -Destination "$out/THIRD-PARTY-NOTICES.txt" -Force
 Compress-Archive -Path @(
     "$out/iidxbg.dll",
     "$out/iidxbg.toml",
-    "$out/iidxbg-config.exe"
+    "$out/iidxbg-config.exe",
+    "$out/THIRD-PARTY-NOTICES.txt"
 ) -DestinationPath $archive -Force
 if ($env:GITHUB_OUTPUT) {
     "archive=$archive" | Out-File -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8 -Append

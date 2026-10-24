@@ -91,10 +91,6 @@ pub fn line_soft() -> Hsla {
     rgb(0x1a1a1a).into()
 }
 
-pub fn line_strong() -> Hsla {
-    rgb(0x414141).into()
-}
-
 pub fn accent() -> Hsla {
     rgb(0x5fe08e).into()
 }
@@ -138,6 +134,15 @@ pub fn surface_color(surface: Surface) -> u32 {
         Surface::TargetGraph => 0x6be29f,
         Surface::PremiumArea => 0xd6b35f,
         Surface::Concentration => 0xb18cff,
+        Surface::NoteSkin => 0x77baff,
+        Surface::GameplayShell => 0xe5b469,
+        Surface::Decision => 0x72dcc7,
+        Surface::Transition => 0xe88bbc,
+        Surface::Title => 0x72dcc7,
+        Surface::Login => 0x72dcc7,
+        Surface::ModeSelect => 0x72dcc7,
+        Surface::GameplayBottom => 0x72dcc7,
+        Surface::Logout => 0x72dcc7,
     }
 }
 
@@ -154,6 +159,15 @@ pub fn surface_icon(surface: Surface) -> IconName {
         Surface::TargetGraph => IconName::ChartNoAxesColumnIncreasing,
         Surface::PremiumArea => IconName::Crown,
         Surface::Concentration => IconName::ScanEye,
+        Surface::NoteSkin => IconName::ListMusic,
+        Surface::GameplayShell => IconName::ScanEye,
+        Surface::Decision => IconName::Trophy,
+        Surface::Transition => IconName::ChevronsUp,
+        Surface::Title => IconName::ScanEye,
+        Surface::Login => IconName::ScanEye,
+        Surface::ModeSelect => IconName::ScanEye,
+        Surface::GameplayBottom => IconName::ScanEye,
+        Surface::Logout => IconName::ScanEye,
     }
 }
 
@@ -166,6 +180,15 @@ pub fn surface_title(surface: Surface) -> &'static str {
         Surface::TargetGraph => "目标分数图",
         Surface::PremiumArea => "Premium 区域",
         Surface::Concentration => "集中模式",
+        Surface::NoteSkin => "音符皮肤",
+        Surface::GameplayShell => "演奏框体",
+        Surface::Decision => "选曲决定画面",
+        Surface::Transition => "过场动画插画",
+        Surface::Title => "登录前背景",
+        Surface::Login => "登录背景",
+        Surface::ModeSelect => "模式选择背景",
+        Surface::GameplayBottom => "演奏区域底部框体",
+        Surface::Logout => "退出结算背景",
     }
 }
 
@@ -178,6 +201,15 @@ pub fn surface_description(surface: Surface) -> &'static str {
         Surface::TargetGraph => "目标分数图背后的窄幅图像",
         Surface::PremiumArea => "Premium 区域背景，IIDX 34 专用",
         Surface::Concentration => "集中模式背景，IIDX 34 专用",
+        Surface::NoteSkin => "自动裁切普通音符与转盘音符，保留原生位置和尺寸",
+        Surface::GameplayShell => "原生框体形状内填充图像，保留轨道与信息",
+        Surface::Decision => "选曲决定背景，保留标题与难度信息",
+        Surface::Transition => "替换决定画面中移动的插画，保留原生运动",
+        Surface::Title => "标题画面的背景，保留原生标志与提示",
+        Surface::Login => "读卡与登录画面的背景",
+        Surface::ModeSelect => "模式选择背景，保留原生选项",
+        Surface::GameplayBottom => "底部装饰框体，保留原生分数与仪表",
+        Surface::Logout => "退出与最终汇总画面的背景",
     }
 }
 

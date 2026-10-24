@@ -107,6 +107,7 @@ pub(super) fn profile() -> Profile {
         ),
     ]);
     Profile {
+        artwork_library: None,
         label: "IIDX 34 / 20260917".into(),
         sha256: "3755587f44785effe5008f74cfe7dccbdf423ad09feead48e00a90f78a42fe83".into(),
         image_size: 0xc5ff000,

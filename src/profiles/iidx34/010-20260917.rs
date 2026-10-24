@@ -2,10 +2,91 @@
 //! Native ABI/lifetime evidence: docs/iidx34-010-0917-analysis.md.
 //! All addresses are RVAs; file hash and live guards remain mandatory.
 
-use crate::profile::{Layout, Profile, Table, native_entries, offsets};
+use crate::profile::{Layout, LibraryProfile, Profile, Table, native_entries, offsets};
 
 pub(super) fn profile() -> Profile {
     let (rvas, guards) = native_entries(&[
+        (
+            "artwork_login_setup",
+            0x8a06a0,
+            "4055415441574883ec404c8be24c8bf9",
+        ),
+        (
+            "artwork_logout_setup",
+            0x8a1fd0,
+            "4055415641574883ec70488b05d73e7b",
+        ),
+        (
+            "artwork_file_load",
+            0x6abd90,
+            "405356574883ec6048c7442428feffff",
+        ),
+        (
+            "artwork_direct_release",
+            0x344c30,
+            "40534883ec208bd9e863eeffff488bc8",
+        ),
+        (
+            "artwork_direct_bind",
+            0x338570,
+            "4c8bdc49895b1049896b184989732041",
+        ),
+        (
+            "artwork_archive_open",
+            0x33ac50,
+            "48895c241048896c2418488974242057",
+        ),
+        (
+            "artwork_archive_load",
+            0x33af10,
+            "48895c241048896c2418488974242057",
+        ),
+        (
+            "artwork_archive_release",
+            0x33b500,
+            "48895c2408574883ec208b810c050000",
+        ),
+        (
+            "artwork_frame",
+            0x328b40,
+            "488bc4565741564883ec7048c74098fe",
+        ),
+        (
+            "native_texture",
+            0x343e10,
+            "48895c2408574883ec408bf9e87ffcff",
+        ),
+        (
+            "effective_texture",
+            0x343f30,
+            "40574883ec3048c7442420feffffff48",
+        ),
+        (
+            "replace_texture",
+            0x344950,
+            "405355565741564883ec4048c7442430",
+        ),
+        (
+            "release_texture",
+            0x344100,
+            "48895c2408574883ec408bf9e8fffcff",
+        ),
+        (
+            "artwork_layer_create",
+            0x32da80,
+            "48895c241048896c2418488974242057",
+        ),
+        (
+            "artwork_dispatch",
+            0x34fed0,
+            "48895c240848896c2410488974241857",
+        ),
+        ("artwork_draw", 0x338900, "488bc441554883ec50f30f100db73cb1"),
+        (
+            "note_batch_flush",
+            0x342730,
+            "48895c241855415641574883ec504889",
+        ),
         // Function name, RVA, first 16 bytes of the verified native entry.
         (
             "select_frame_build",
@@ -60,6 +141,11 @@ pub(super) fn profile() -> Profile {
             "40534883ec2048896c2430488bd94889",
         ),
         ("movie_draw", 0x9362b0, "4883ec4880791000743080792400742a"),
+        (
+            "artwork_movie_texture",
+            0xa4fd50,
+            "40534883ec3048c7442420feffffff48",
+        ),
         ("cover_build", 0x8f6390, "4885d20f84df01000048895c24184889"),
         ("cover_visual", 0x8f5120, "4053574883ec580f29742440488bf90f"),
         ("cover_delete", 0x8f4e20, "48895c2408574883ec20488bd933ff48"),
@@ -143,6 +229,24 @@ pub(super) fn profile() -> Profile {
         ("line_update", 0x33bb10, "448b49084585c974218b4118488d5128"),
     ]);
     Profile {
+        artwork_library: Some({
+            let (rvas, guards) = native_entries(&[
+                ("shape_id", 0x119b0, "40534883ec20488bda8bd1488d0d3e3a"),
+                ("shape_info", 0x10550, "40534883ec20488bd9f7c20000007875"),
+                (
+                    "artwork_shape_draw",
+                    0x1a420,
+                    "405556488dac2458f5ffff4881eca80b",
+                ),
+            ]);
+            LibraryProfile {
+                name: "afp-utils.dll".into(),
+                sha256: "b74a538ee13603d8d9d695a6c14b296ac532685528923b30e125d0197d706322".into(),
+                image_size: 0x42000,
+                rvas,
+                guards,
+            }
+        }),
         label: "IIDX 34 / 010-0917".into(),
         sha256: "c98e183ec81ecb9e1cb13c237f9c9cb0b3f65b6fdaff6fd5e6a526008c546534".into(),
         image_size: 0xc5ff000,
@@ -172,6 +276,9 @@ pub(super) fn profile() -> Profile {
             },
         ],
         surface_data: offsets(&[
+            ("artwork_texture_info", 0xc66da0),
+            ("artwork_native_id", 0xc66d78),
+            ("note_batches", 0xc38f720),
             ("afp_group_get", 0xc66bf8),
             ("afp_group_set", 0xc66bf0),
             ("select_vtable", 0xd52508),

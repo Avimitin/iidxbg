@@ -113,8 +113,9 @@ mod tests {
         let Update::Image(prepared) = loader.refresh(&config, &root).unwrap() else {
             panic!("reload")
         };
-        assert_eq!(prepared.bgra[3], 0); // Transparent contain margin, no blur.
-        let center = (540 * 1920 + 960) * 4;
+        assert_eq!((prepared.width, prepared.height), (1080, 1080));
+        assert_eq!(prepared.bgra[3], 255); // No forced full-screen canvas.
+        let center = (540 * 1080 + 540) * 4;
         assert_eq!(&prepared.bgra[center..center + 4], &[20, 40, 80, 255]);
 
         config.selection.frame_chara_image = root.join("missing.png");

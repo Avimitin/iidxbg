@@ -547,6 +547,12 @@ unsafe extern "system" fn background_hook(this: usize, tick: u32) -> usize {
     let n = NATIVE.get().expect("published before hook");
     let original: Background = unsafe { n.function("background_update") };
     RESULTS_CLIP.store(0, Ordering::Release);
+    if this >= n.profile.layout.scene_background
+        && unsafe { field(this - n.profile.layout.scene_background, 0) }
+            == n.base + n.profile.layout.scene_vtable
+    {
+        surfaces::artwork_result_visit(this - n.profile.layout.scene_background, true);
+    }
     let result = unsafe { original(this, tick) };
     if !ENABLED.load(Ordering::Acquire) || !READY.load(Ordering::Acquire) {
         return result;
@@ -584,6 +590,7 @@ unsafe extern "system" fn cleanup_hook(this: usize) -> usize {
 }
 
 fn retire_scene(n: &Native, this: usize) {
+    surfaces::artwork_result_visit(this, false);
     // Restore the stock binding while this scene still owns valid clips.
     boundary(|| {
         if let Some(mut state) = graphics_state()
@@ -926,6 +933,7 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                 }
                 let mut failed = false;
                 let config = providers.config().clone();
+                surfaces::profile_artwork(config.profile_artwork);
                 let roots: [Surface; Surface::COUNT] = std::array::from_fn(|i| {
                     config
                         .binding_root(Surface::ALL[i])
@@ -934,6 +942,13 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                 let mut needed = [false; Surface::COUNT];
                 for surface in Surface::ALL {
                     if config.surface_enabled(surface) {
+                        needed[roots[surface.index()].index()] = true;
+                    }
+                }
+                for art in &config.artwork {
+                    if art.enabled
+                        && let Some(surface) = art.source.bind
+                    {
                         needed[roots[surface.index()].index()] = true;
                     }
                 }
@@ -991,6 +1006,14 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                         };
                         surfaces::publish(&choices);
                     }
+                }
+                let (artwork, errors) = providers.prepare_artwork(&images);
+                failed |= !errors.is_empty();
+                for error in errors {
+                    log(&root, &error);
+                }
+                if generation == REQUEST.load(Ordering::Acquire) && !STOP.load(Ordering::Acquire) {
+                    surfaces::publish_artwork(artwork);
                 }
                 let superseded = generation != REQUEST.load(Ordering::Acquire);
                 if !failed && !superseded {
@@ -1052,6 +1075,14 @@ fn reload_request(
         Ok(crate::character::Update::Unchanged) => {}
         Ok(crate::character::Update::Native) => surfaces::publish_character(None),
         Ok(crate::character::Update::Image(prepared)) => {
+            let prepared = if NATIVE
+                .get()
+                .is_some_and(|n| n.profile.rvas.contains_key("artwork_dispatch"))
+            {
+                prepared
+            } else {
+                crate::pixels::character_canvas(prepared)
+            };
             log(
                 root,
                 &format!("Prepared selection frame character: {}", prepared.label),
