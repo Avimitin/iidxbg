@@ -51,6 +51,8 @@ static OWNER: AtomicU32 = AtomicU32::new(0);
 static REQUEST: AtomicU64 = AtomicU64::new(1);
 static WORKER: OnceLock<thread::Thread> = OnceLock::new();
 static HIDE_FRAME_CHARA: AtomicBool = AtomicBool::new(false);
+static MMD_FRAME_CHARA: AtomicBool = AtomicBool::new(false);
+static MMD_QPRO: AtomicBool = AtomicBool::new(false);
 static PREMIUM_AREA_ENABLED: AtomicBool = AtomicBool::new(false);
 static CONCENTRATION_ENABLED: AtomicBool = AtomicBool::new(false);
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
@@ -1103,16 +1105,19 @@ fn reload_request(
     HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
     PREMIUM_AREA_ENABLED.store(providers.enabled(Surface::PremiumArea), Ordering::Release);
     CONCENTRATION_ENABLED.store(providers.enabled(Surface::Concentration), Ordering::Release);
+    MMD_QPRO.store(config.uses_mmd_qpro(), Ordering::Release);
+    if MMD_FRAME_CHARA.swap(config.uses_mmd_character(), Ordering::AcqRel)
+        != config.uses_mmd_character()
+    {
+        surfaces::character_changed();
+    }
     let model_supported = NATIVE
         .get()
         .is_some_and(|n| n.profile.rvas.contains_key("reaction_grade"));
-    match character.mmd.refresh(
-        &config.mmd,
-        root,
-        config.enabled
-            && (config.selection.frame_chara || config.mmd.replace_qpro)
-            && model_supported,
-    ) {
+    match character
+        .mmd
+        .refresh(&config.mmd, root, config.uses_mmd() && model_supported)
+    {
         Ok(true) => {
             surfaces::character_changed();
             if let Some(model) = crate::mmd::snapshot() {

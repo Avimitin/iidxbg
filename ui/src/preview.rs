@@ -151,7 +151,7 @@ fn prepare(config_path: &Path, target: Surface) -> Result<Prepared, String> {
     if !config.enabled {
         return Err("全局总开关已关闭".into());
     }
-    if target == Surface::SongSelect && config.mmd.enabled {
+    if target == Surface::SongSelect && config.uses_mmd_character() {
         let model = iidxbg::mmd::load(&config.mmd, config_path.parent().unwrap_or(Path::new(".")))
             .map_err(|e| describe(&e))?;
         return iidxbg::mmd::render::preview(model, 0., [0., 0.], 0.).map_err(|e| describe(&e));

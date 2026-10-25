@@ -208,6 +208,9 @@ impl AppView {
                 window,
                 cx,
             ));
+            if let Some(editor) = &self.editor {
+                editor.focus_handle().focus(window, cx);
+            }
         }
         cx.notify();
     }

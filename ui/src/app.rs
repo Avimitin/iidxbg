@@ -260,6 +260,7 @@ impl AppView {
             return;
         }
         let editor = SurfaceEditor::new(surface, self.store.config(), window, cx);
+        editor.focus_handle().focus(window, cx);
         self.editor = Some(editor);
         cx.notify();
     }
@@ -664,8 +665,8 @@ pub(crate) fn open_window_with_config(
         .unwrap_or((1440., 900.));
     let width = 1600.0_f32.min((available_width - 32.).max(640.));
     let height = 960.0_f32.min((available_height - 24.).max(420.));
-    let min_width = 1200.0_f32.min(width);
-    let min_height = 720.0_f32.min(height);
+    let min_width = 760.0_f32.min(width);
+    let min_height = 560.0_f32.min(height);
     let window_bounds = Some(WindowBounds::centered(size(px(width), px(height)), cx));
     let window_min_size = Some(size(px(min_width), px(min_height)));
     match config {

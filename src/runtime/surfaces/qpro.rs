@@ -63,7 +63,8 @@ impl Replacement {
         let Some(component) = component(n, scene) else {
             return;
         };
-        let Some(model) = crate::mmd::snapshot().filter(|m| m.settings.replace_qpro) else {
+        let Some(model) = crate::mmd::snapshot().filter(|_| MMD_QPRO.load(Ordering::Acquire))
+        else {
             self.sprites = [None, None];
             self.identity = None;
             self.failed = false;

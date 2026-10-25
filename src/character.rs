@@ -35,7 +35,7 @@ pub struct LocalImage {
 impl LocalImage {
     pub fn refresh(&mut self, config: &Config, root: &Path) -> Result<Update> {
         let path = &config.selection.frame_chara_image;
-        if !config.enabled || path.as_os_str().is_empty() {
+        if !config.uses_character_image() || path.as_os_str().is_empty() {
             let changed = self.attempted.as_ref() != Some(&None);
             self.attempted = Some(None);
             return Ok(if changed {

@@ -61,6 +61,32 @@ only the Qpro replacement. Native Qpro returns when replacement is disabled or
 unavailable. Other Qpro screens and optional background effects remain native.
 See [the exact-build Qpro analysis](iidx34-mmd-qpro.md).
 
+The configuration app separates **large character** and **Qpro** source choices.
+Use stock artwork or a custom image for the large character while Qpro uses PMX;
+enabling Qpro never changes the large character's source. Saved asset paths stay
+available when switching sources. Both MMD placements share the imported model
+and condition motions, while their sizes remain independent.
+
+`[selection] frame_chara_source` accepts `stock`, `image`, `mmd`, or `auto`.
+Omitting it preserves the old behavior (`auto`: enabled MMD, otherwise an image
+if configured, otherwise stock). The app resolves `auto` to an explicit choice
+before enabling Qpro, preventing Qpro from inadvertently enabling a large MMD.
+`frame_chara` still controls large-character visibility. `[mmd] enabled` remains
+the MMD master switch; `replace_qpro` independently selects PMX for Qpro. For
+example, stock large character with PMX Qpro:
+
+```toml
+[selection]
+frame_chara = true
+frame_chara_source = "stock"
+
+[mmd]
+enabled = true
+replace_qpro = true
+model_path = 'D:\MyModels\character.pmx'
+motion_path = 'D:\MyMotions\idle.vmd'
+```
+
 The reaction switch controls these condition motions and procedural head/smile
 overlays. The configurable head bone looks toward the right-hand list while
 the platter moves, with a small up/down tilt. The default target is 45 degrees,

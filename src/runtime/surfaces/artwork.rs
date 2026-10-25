@@ -249,6 +249,7 @@ unsafe fn acquire(
     }
     if target == Target::Character
         && !HIDE_FRAME_CHARA.load(Ordering::Acquire)
+        && MMD_FRAME_CHARA.load(Ordering::Acquire)
         && crate::mmd::ACTIVE.load(Ordering::Acquire)
         && let Some(model) = crate::mmd::snapshot()
     {

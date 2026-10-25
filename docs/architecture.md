@@ -16,6 +16,14 @@ native Qpro anchors. Root visibility is restored before original updates and
 cleanup, with pooled layer identities checked. A cached GPU straight-alpha copy
 feeds native sprites; no second model evaluation or game readback is needed.
 See [Qpro ownership and ABI evidence](iidx34-mmd-qpro.md).
+Large-character source routing is independent of Qpro: `stock`, `image` and
+`mmd` are explicit choices, with `auto` retaining legacy precedence. The worker
+publishes separate current-configuration MMD gates for both placements, so a
+failed replacement import cannot prevent disabling either placement. It only prepares images for image/legacy
+selection. The model lease remains available when Qpro alone needs it. Changing
+the main source invalidates atlas composition even if the shared model does not
+change. This adds no native RVA, hook or ABI; ownership and reset paths above
+remain in force.
 
 Ship one `iidxbg.dll` for IIDX, with an independently verified profile for each
 supported build. This is explicit support for known binaries, not automatic

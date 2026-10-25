@@ -20,7 +20,18 @@ binary; the plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
   Cycles are rejected before saving. Unbinding restores independent settings.
 - Built-in Konachan/Yande.re endpoints and custom post.json URLs are supported.
   Custom APIs may use explicitly listed CDN hostnames. API downloads remain images.
-- Selection-character controls live inside the song-selection editor.
+- Module settings use a persistent category sidebar, settings search and a fixed
+  save/error footer. On narrow windows, categories wrap above the form. Ctrl+F
+  focuses search; Escape clears search first, then closes the editor.
+- Song selection has separate pages for media, display/sharing, the large
+  character, Qpro, MMD model/dance, reactions and advanced options. Ordinary
+  modules show only media, display/sharing and advanced pages. Provider controls
+  follow the selected source; BPM and reaction details appear when enabled.
+- Large-character source is independent of Qpro: stock or a custom image can
+  remain on the left while Qpro uses PMX. Both can also use MMD. MMD consumers
+  share the imported model/motions, with separate placement sizes. Source changes
+  preserve saved image, PMX and VMD paths. Old configurations retain their prior
+  selection until a source is explicitly chosen.
 - Valid edits save atomically while preserving TOML comments. Invalid edits retain
   the last valid on-disk file and display an error. Reload picks up external edits.
 - Previews run off the UI thread and share one prepared preview for bound surfaces.
@@ -95,13 +106,32 @@ card editor, status overlay, immediate TOML write, and an actual prepared image.
 This does not replace in-game validation of the plugin. When redistributing the
 GUI executable, include the GPUI Kit (Apache-2.0) and Lucide icon (ISC) notices.
 
+The reorganized editor was additionally exercised on 2026-10-25 at 2500×1650
+and 1650×1200 physical window sizes with 200% scaling. Checks covered category
+navigation, Ctrl+F/BPM search, Escape, compact navigation, scrolling, independent
+character/Qpro choices and their saved TOML, invalid-size rejection without a
+disk change, and retaining an unfinished value across page changes. Ordinary
+modules showed only their three relevant categories. Screenshots and private
+fixtures are under ignored `target/ui-settings-*`; no user assets are shipped.
+75 core tests and 25 UI tests passed (7/1 optional tests skipped), along with
+Clippy, release builds and exact-build native guards. The new source routing has
+not yet been tested in game; earlier MMD/Qpro playback was user-confirmed.
+
+The design borrows category navigation and search destinations from
+[VS Code settings](https://code.visualstudio.com/docs/configure/settings), and
+separates routine controls from specialized options as in
+[OBS settings](https://obsproject.com/kb/obs-studio-overview). Here, searches open
+a relevant category, provider controls follow the selected source, and advanced
+model/download options have their own page. Existing automatic saving remains.
+
 ## Source layout
 
 | Path | Role |
 |---|---|
 | `src/app.rs` | model, window/theme setup, custom title bar, preview scheduling and copy rules |
 | `src/gallery.rs` | full-bleed Metro grid, hover details, preview modules |
-| `src/editor.rs` | centered per-surface editor, media pickers and binding controls |
+| `src/editor.rs` | editor input state, validation, media pickers and bindings |
+| `src/editor/pages.rs` | category layout, search destinations and contextual controls |
 | `src/store.rs` | comment-preserving TOML load/edit/validate/atomic write |
 | `src/preview.rs` | provider worker, fingerprints, BGRA→GPUI images, placeholders |
 | `src/theme.rs` | type scale, colors, responsive layout metrics |

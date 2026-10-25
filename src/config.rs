@@ -80,6 +80,18 @@ fn default_mask() -> bool {
 pub struct SelectionOptions {
     pub frame_chara: bool,
     pub frame_chara_image: PathBuf,
+    pub frame_chara_source: CharacterSource,
+}
+
+/// Auto preserves configurations written before the character/Qpro split.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CharacterSource {
+    #[default]
+    Auto,
+    Stock,
+    Image,
+    Mmd,
 }
 
 impl Default for SelectionOptions {
@@ -87,6 +99,7 @@ impl Default for SelectionOptions {
         Self {
             frame_chara: true,
             frame_chara_image: PathBuf::new(),
+            frame_chara_source: CharacterSource::Auto,
         }
     }
 }
@@ -511,6 +524,41 @@ impl Config {
         self.enabled && !self.selection.frame_chara
     }
 
+    pub fn character_source(&self) -> CharacterSource {
+        match self.selection.frame_chara_source {
+            CharacterSource::Auto if self.mmd.enabled => CharacterSource::Mmd,
+            CharacterSource::Auto if !self.selection.frame_chara_image.as_os_str().is_empty() => {
+                CharacterSource::Image
+            }
+            CharacterSource::Auto => CharacterSource::Stock,
+            source => source,
+        }
+    }
+
+    pub fn uses_mmd_character(&self) -> bool {
+        self.enabled
+            && self.selection.frame_chara
+            && self.mmd.enabled
+            && self.character_source() == CharacterSource::Mmd
+    }
+
+    pub fn uses_character_image(&self) -> bool {
+        self.enabled
+            && self.selection.frame_chara
+            && matches!(
+                self.selection.frame_chara_source,
+                CharacterSource::Auto | CharacterSource::Image
+            )
+    }
+
+    pub fn uses_mmd(&self) -> bool {
+        self.enabled && self.mmd.enabled && (self.uses_mmd_character() || self.mmd.replace_qpro)
+    }
+
+    pub fn uses_mmd_qpro(&self) -> bool {
+        self.enabled && self.mmd.enabled && self.mmd.replace_qpro
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.validate_base()?;
         self.mmd.validate()?;
@@ -807,6 +855,46 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn character_source_is_independent_of_qpro_and_preserves_legacy_selection() {
+        let mut c = Config::parse(include_str!("../tests/fixtures/default.toml")).unwrap();
+        c.mmd.enabled = true;
+        c.mmd.replace_qpro = true;
+        c.selection.frame_chara_image = "saved-image.png".into();
+        assert_eq!(c.character_source(), CharacterSource::Mmd);
+        assert!(c.uses_mmd_character());
+        for source in [
+            CharacterSource::Stock,
+            CharacterSource::Image,
+            CharacterSource::Mmd,
+        ] {
+            c.selection.frame_chara_source = source;
+            assert!(c.uses_mmd(), "Qpro must retain its model");
+            assert!(c.uses_mmd_qpro());
+            assert_eq!(c.uses_mmd_character(), source == CharacterSource::Mmd);
+            assert_eq!(c.uses_character_image(), source == CharacterSource::Image);
+            let saved = serde_json::to_string(&c).unwrap();
+            let restored: Config = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored.character_source(), source);
+            assert_eq!(
+                restored.selection.frame_chara_image,
+                c.selection.frame_chara_image
+            );
+        }
+        c.selection.frame_chara = false;
+        assert!(!c.uses_mmd_character());
+        assert!(c.uses_mmd());
+        c.mmd.replace_qpro = false;
+        assert!(!c.uses_mmd_qpro());
+        assert!(!c.uses_mmd());
+        c.selection.frame_chara = true;
+        c.selection.frame_chara_source = CharacterSource::Auto;
+        c.mmd.enabled = false;
+        assert_eq!(c.character_source(), CharacterSource::Image);
+        c.selection.frame_chara_image.clear();
+        assert_eq!(c.character_source(), CharacterSource::Stock);
+    }
     #[test]
     fn binding_chains_use_root_settings_but_independent_enable_and_reject_cycles() {
         let mut c = Config::parse(include_str!("../tests/fixtures/default.toml")).unwrap();

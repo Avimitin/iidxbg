@@ -15,6 +15,9 @@ use gpui_kit::component::{
 use gpui_kit::*;
 use iidxbg::config::{Config, Fit, MoebooruDomain, Source, Surface};
 
+mod pages;
+use pages::EditorPage;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfaceTextField {
     MediaPath,
@@ -185,6 +188,10 @@ impl SurfaceTextField {
 }
 pub(crate) struct SurfaceEditor {
     pub surface: Surface,
+    page: EditorPage,
+    search: Entity<InputState>,
+    query: String,
+    focus: gpui::FocusHandle,
     inputs: Vec<Entity<InputState>>,
     subscriptions: Vec<Subscription>,
     pub error: Option<SharedString>,
@@ -205,10 +212,29 @@ impl SurfaceEditor {
             .collect();
         let mut editor = Self {
             surface,
+            page: EditorPage::Media,
+            search: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(if surface == Surface::SongSelect {
+                    "搜索设置，如 Qpro、BPM、图片…"
+                } else {
+                    "搜索设置，如图片、共享、下载…"
+                })
+            }),
+            query: String::new(),
+            focus: cx.focus_handle(),
             inputs,
             subscriptions: Vec::new(),
             error: None,
         };
+        let search_subscription = cx.subscribe(&editor.search, |view, input, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                if let Some(editor) = &mut view.editor {
+                    editor.query = input.read(cx).value().trim().to_lowercase();
+                }
+                cx.notify();
+            }
+        });
+        editor.subscriptions.push(search_subscription);
         for field in SurfaceTextField::ALL {
             let sub = cx.subscribe_in(
                 editor.input_for(field),
@@ -231,8 +257,34 @@ impl SurfaceEditor {
     pub(crate) fn input_for(&self, field: SurfaceTextField) -> &Entity<InputState> {
         &self.inputs[field as usize]
     }
+    pub(crate) fn focus_handle(&self) -> &gpui::FocusHandle {
+        &self.focus
+    }
 }
 impl AppView {
+    fn editor_page(&mut self, page: EditorPage, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.editor {
+            editor.page = page;
+            editor.query.clear();
+            editor
+                .search
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            editor.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn rebuild_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(old) = self.editor.take() {
+            let mut editor = SurfaceEditor::new(old.surface, &self.editor_config(), window, cx);
+            editor.page = old.page;
+            editor.query = old.query;
+            editor.search.update(cx, |input, cx| {
+                input.set_value(editor.query.clone(), window, cx)
+            });
+            self.editor = Some(editor);
+        }
+    }
     pub(crate) fn on_surface_text(
         &mut self,
         surface: Surface,
@@ -374,12 +426,7 @@ impl AppView {
                 }
             }
         }) {
-            self.editor = Some(SurfaceEditor::new(
-                surface,
-                &self.editor_config(),
-                window,
-                cx,
-            ));
+            self.rebuild_editor(window, cx);
         }
     }
 }
@@ -390,644 +437,47 @@ fn field_row(
     picker: bool,
     cx: &mut Context<AppView>,
 ) -> AnyElement {
-    h_flex()
+    v_flex()
         .w_full()
-        .items_center()
-        .gap_3()
+        .min_w_0()
+        .flex_1()
+        .gap_2()
         .child(
             div()
-                .w(px(144.))
-                .flex_shrink_0()
-                .text_base()
+                .text_sm()
+                .text_color(theme::muted_ink())
                 .child(label.to_owned()),
         )
         .child(
-            Input::new(editor.input_for(field))
-                .large()
-                .flex_1()
-                .min_w_0(),
+            h_flex()
+                .gap_2()
+                .w_full()
+                .child(
+                    Input::new(editor.input_for(field))
+                        .large()
+                        .flex_1()
+                        .min_w_0(),
+                )
+                .when(picker, |row| {
+                    row.child(
+                        Button::new(SharedString::from(format!("pick-{}", field.key())))
+                            .large()
+                            .outline()
+                            .label("浏览…")
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.pick_surface_directory(field, window, cx)
+                            })),
+                    )
+                }),
         )
-        .when(picker, |row| {
-            row.child(
-                Button::new(SharedString::from(format!("pick-{}", field.key())))
-                    .large()
-                    .outline()
-                    .label("浏览…")
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.pick_surface_directory(field, window, cx)
-                    })),
-            )
-        })
         .into_any_element()
 }
+
 pub(crate) fn render_editor(
     view: &mut AppView,
     editor: &SurfaceEditor,
     window: &mut Window,
     cx: &mut Context<AppView>,
 ) -> AnyElement {
-    let surface = editor.surface;
-    let config = view.editor_config();
-    let c = config.for_surface(surface);
-    let root = config.binding_root(surface).unwrap_or(surface);
-    let bound = root != surface;
-    let custom_artwork = view.artwork_editor;
-    let mut body = v_flex()
-        .id("surface-settings")
-        .w_full()
-        .p_7()
-        .gap_6()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scrollbar();
-    if let Some(error) = editor
-        .error
-        .clone()
-        .or_else(|| view.store.error().map(|e| e.to_owned().into()))
-    {
-        body = body.child(widgets::error_banner(error));
-    }
-    if let Some(index) = custom_artwork {
-        let art = &view.store.config().artwork[index];
-        body = body.child(
-            div()
-                .text_base()
-                .child(format!("{} / {}", art.archive, art.texture)),
-        );
-        if !art.texture.starts_with("@shape/") && art.archive != "@movie" {
-            body = body.child(
-                h_flex().gap_3().child("保留原素材透明轮廓").child(
-                    Switch::new("artwork-mask")
-                        .checked(art.native_mask)
-                        .on_change(cx.listener(move |view, checked, _, cx| {
-                            view.store.edit(|doc| {
-                                if let Some(t) = doc["artwork"]
-                                    .as_array_of_tables_mut()
-                                    .and_then(|a| a.get_mut(index))
-                                {
-                                    t.insert("native_mask", toml_edit::value(*checked));
-                                }
-                            });
-                            cx.notify();
-                        })),
-                ),
-            );
-        }
-    }
-    let mut bindings = h_flex().gap_3().flex_wrap().child(
-        widgets::segment_button("bind-independent", "独立设置", !bound).on_click(
-            cx.listener(move |view, _, window, cx| view.bind_surface(surface, None, window, cx)),
-        ),
-    );
-    for target in Surface::ALL.into_iter().filter(|s| surface.can_bind(*s)) {
-        bindings = bindings.child(
-            widgets::segment_button(
-                SharedString::from(format!("bind-{}", target.name())),
-                theme::surface_title(target),
-                config.source_override(surface).bind == Some(target)
-                    || (bound && config.source_override(surface).bind.is_none() && root == target),
-            )
-            .on_click(cx.listener(move |view, _, window, cx| {
-                view.bind_surface(surface, Some(target), window, cx)
-            })),
-        );
-    }
-    body = body
-        .child(div().text_base().child("绑定到组件"))
-        .child(bindings);
-    if bound {
-        body = body
-            .child(
-                div()
-                    .text_base()
-                    .text_color(theme::muted_ink())
-                    .child(format!(
-                        "共享「{}」的来源和当前媒体；该组件的开关保持独立。",
-                        theme::surface_title(root)
-                    )),
-            )
-            .child(
-                Button::new("edit-binding")
-                    .outline()
-                    .label("编辑绑定来源")
-                    .on_click(
-                        cx.listener(move |view, _, window, cx| view.open_editor(root, window, cx)),
-                    ),
-            );
-    } else {
-        let mut sources = h_flex().gap_3().flex_wrap();
-        for (source, label) in [
-            (Source::File, "固定图片 / 视频"),
-            (Source::Local, "文件夹随机"),
-            (Source::Remote, "Moebooru API"),
-            (Source::Mixed, "文件夹 + API"),
-            (Source::Bilibili, "Bilibili"),
-        ] {
-            sources = sources.child(
-                widgets::segment_button(
-                    SharedString::from(format!("source-{}", store::source_key(source))),
-                    label,
-                    c.source == source,
-                )
-                .on_click(
-                    cx.listener(move |view, _, _, cx| view.set_surface_source(surface, source, cx)),
-                ),
-            );
-        }
-        body = body.child(sources);
-        if c.source == Source::Bilibili {
-            use iidxbg::bilibili::Mode;
-            let mut modes = h_flex().gap_3().flex_wrap();
-            for (mode, label) in [
-                (Mode::Video, "固定视频"),
-                (Mode::Recommendations, "随机推荐"),
-                (Mode::Playlist, "合集 / 系列"),
-                (Mode::Favourites, "收藏夹"),
-                (Mode::Live, "直播间"),
-            ] {
-                modes = modes.child(
-                    widgets::segment_button(
-                        SharedString::from(format!("bili-mode-{}", mode.key())),
-                        label,
-                        c.bilibili.selection.mode == mode,
-                    )
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.commit_surface(0, cx, |doc| {
-                            store::set_string(
-                                doc,
-                                &["sources", surface.name(), "bilibili", "mode"],
-                                mode.key(),
-                            )
-                        });
-                    })),
-                );
-            }
-            body = body.child(modes);
-            match c.bilibili.selection.mode {
-                Mode::Live => {
-                    body = body.child(field_row(
-                        editor,
-                        SurfaceTextField::BiliRoom,
-                        "直播间链接 / ID",
-                        false,
-                        cx,
-                    ));
-                }
-                Mode::Video => {
-                    body = body.child(field_row(
-                        editor,
-                        SurfaceTextField::BiliVideo,
-                        "视频链接 / BV",
-                        false,
-                        cx,
-                    ))
-                }
-                Mode::Playlist => {
-                    body = body.child(field_row(
-                        editor,
-                        SurfaceTextField::BiliPlaylist,
-                        "合集 / 系列链接",
-                        false,
-                        cx,
-                    ))
-                }
-                Mode::Favourites => {
-                    body = body.child(field_row(
-                        editor,
-                        SurfaceTextField::BiliFavourites,
-                        "收藏夹链接 / ID",
-                        false,
-                        cx,
-                    ));
-                    let mut folders = h_flex().gap_3().flex_wrap();
-                    for folder in &view.bili.folders {
-                        let id = folder.id.to_string();
-                        folders = folders.child(
-                            Button::new(SharedString::from(format!("fav-{}", folder.id)))
-                                .large()
-                                .outline()
-                                .label(folder.title.clone())
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.commit_surface(0, cx, |doc| {
-                                        store::set_string(
-                                            doc,
-                                            &["sources", surface.name(), "bilibili", "favourites"],
-                                            &id,
-                                        )
-                                    });
-                                    // The overlay temporarily owns its editor during render.
-                                    if let Some(editor) = &view.editor {
-                                        editor
-                                            .input_for(SurfaceTextField::BiliFavourites)
-                                            .update(cx, |state, cx| {
-                                                state.set_value(id.clone(), window, cx)
-                                            });
-                                    }
-                                })),
-                        );
-                    }
-                    body = body.child(folders);
-                }
-                Mode::Recommendations => {
-                    body = body.child(
-                        div()
-                            .text_base()
-                            .child("使用已登录账号的推荐流，每次准备随机选择一个视频。"),
-                    )
-                }
-            }
-            body = body.child(
-                div()
-                    .text_sm()
-                    .text_color(theme::muted_ink())
-                    .child(if c.bilibili.selection.mode == Mode::Live {
-                        "直播使用短分片缓冲，不保存整场直播；未开播时保留原画面，播放中断后自动重连。无音频。"
-                    } else {
-                        "先缓存 H.264 视频再播放。登录和收藏夹刷新请前往侧栏 Bilibili 页面。"
-                    }),
-            );
-        }
-        if c.source == Source::File {
-            body = body.child(field_row(
-                editor,
-                SurfaceTextField::MediaPath,
-                "媒体文件",
-                true,
-                cx,
-            ));
-        }
-        if matches!(c.source, Source::Local | Source::Mixed) {
-            body = body
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::LocalDirectory,
-                    "随机文件夹",
-                    true,
-                    cx,
-                ))
-                .child(
-                    h_flex()
-                        .gap_3()
-                        .child(div().text_base().child("包含子文件夹"))
-                        .child(Switch::new("recursive").checked(c.recursive).on_change(
-                            cx.listener(move |view, checked, _, cx| {
-                                view.commit_surface(0, cx, |doc| {
-                                    store::set_bool(
-                                        doc,
-                                        &["sources", surface.name(), "recursive"],
-                                        *checked,
-                                    )
-                                });
-                            }),
-                        )),
-                );
-        }
-        if matches!(c.source, Source::Remote | Source::Mixed) {
-            let mut domains = h_flex().gap_3();
-            for (domain, label) in [
-                (MoebooruDomain::Net, "Konachan.net"),
-                (MoebooruDomain::Com, "Konachan.com"),
-                (MoebooruDomain::Yandere, "Yande.re"),
-            ] {
-                domains = domains.child(
-                    widgets::segment_button(
-                        SharedString::from(format!("domain-{label}")),
-                        label,
-                        c.moebooru.api_url.is_empty() && c.moebooru.domain == domain,
-                    )
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.commit_surface(0, cx, |doc| {
-                            store::set_string(
-                                doc,
-                                &["sources", surface.name(), "moebooru", "domain"],
-                                store::domain_key(domain),
-                            );
-                            store::set_string(
-                                doc,
-                                &["sources", surface.name(), "moebooru", "api_url"],
-                                "",
-                            );
-                        });
-                        view.editor = Some(SurfaceEditor::new(
-                            surface,
-                            &view.editor_config(),
-                            window,
-                            cx,
-                        ));
-                    })),
-                );
-            }
-            body = body
-                .child(domains)
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::ApiUrl,
-                    "自定义 API",
-                    false,
-                    cx,
-                ))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::muted_ink())
-                        .child("填完整 post.json 地址；留空使用上面选择的网站。"),
-                )
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::MediaHosts,
-                    "图片 CDN 域名",
-                    false,
-                    cx,
-                ))
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::Tags,
-                    "搜索标签",
-                    false,
-                    cx,
-                ))
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::SaveDirectory,
-                    "下载目录",
-                    true,
-                    cx,
-                ))
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::PageMax,
-                    "随机页数上限",
-                    false,
-                    cx,
-                ))
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::TimeoutSeconds,
-                    "超时（秒）",
-                    false,
-                    cx,
-                ))
-                .child(field_row(
-                    editor,
-                    SurfaceTextField::MaxImages,
-                    "保留图片数量",
-                    false,
-                    cx,
-                ));
-        }
-        if custom_artwork.is_none() {
-            let mut fit = h_flex()
-                .gap_3()
-                .child(div().text_base().child("图片适配（视频拉伸）"));
-            for (value, label) in [
-                (Fit::Cover, "裁切铺满"),
-                (Fit::Contain, "完整显示 + 模糊边缘"),
-            ] {
-                fit = fit.child(
-                    widgets::segment_button(
-                        SharedString::from(format!("fit-{}", store::fit_key(value))),
-                        label,
-                        c.image.fit == value,
-                    )
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.commit_surface(0, cx, |doc| {
-                            store::set_string(
-                                doc,
-                                &["sources", surface.name(), "fit"],
-                                store::fit_key(value),
-                            )
-                        });
-                    })),
-                );
-            }
-            body = body.child(fit);
-        }
-    }
-    if surface == Surface::SongSelect {
-        body = body.child(
-            h_flex().gap_3().child("实时 MMD 角色（PMX）").child(
-                Switch::new("mmd-enabled")
-                    .checked(config.mmd.enabled)
-                    .on_change(cx.listener(|view, checked, _, cx| {
-                        view.commit_surface(0, cx, |doc| {
-                            store::set_bool(doc, &["mmd", "enabled"], *checked)
-                        });
-                    })),
-            ),
-        );
-        if config.mmd.enabled {
-            body=body.child(field_row(editor,SurfaceTextField::MmdModel,"PMX 模型",true,cx))
-                .child(field_row(editor,SurfaceTextField::MmdMotion,"平时循环 VMD（可选）",true,cx))
-                .child(div().text_sm().text_color(theme::muted_ink()).child("选择已解压的 PMX，保留旁边的贴图文件夹。VMD 静音循环；留空显示待机姿势。模型与动作均由用户提供。当前支持已验证的 IIDX 34 / 010-0917 构建。"));
-            body = body.child(h_flex().gap_3().child("待机舞蹈跟随所选歌曲 BPM").child(
-                Switch::new("mmd-bpm-sync")
-                    .checked(config.mmd.bpm_sync)
-                    .on_change(cx.listener(|view, checked, _, cx| {
-                        view.commit_surface(0, cx, |doc| {
-                            store::set_bool(doc, &["mmd", "bpm_sync"], *checked)
-                        });
-                    })),
-            )).child(field_row(editor, SurfaceTextField::MmdMotionBpm, "平时动作原始 BPM", false, cx))
-              .child(div().text_sm().text_color(theme::muted_ink()).child("仅在选曲待机时调速；进入演奏仍隐藏角色。VMD 不含 BPM，请填写动作原曲速度。变速曲取最高 BPM；未知时为原速，倍率限制 0.25–4 倍。搓盘与成绩动作保持原速。"));
-            body = body.child(h_flex().gap_3().child("角色位置").child(
-                widgets::segment_button("mmd-top-left", "左上角（避开顶栏）", false)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        if view.commit_surface(0, cx, |doc| {
-                            store::set_f64(doc, &["mmd", "display_scale"], 42.);
-                            store::set_f64(doc, &["mmd", "position_x"], 20.);
-                            store::set_f64(doc, &["mmd", "position_y"], 32.);
-                            store::set_bool(doc, &["mmd", "keep_hud_clear"], true);
-                        }) {
-                            view.editor = Some(SurfaceEditor::new(
-                                Surface::SongSelect, view.store.config(), window, cx,
-                            ));
-                        }
-                    })),
-            ))
-                .child(widgets::segment_button("mmd-original-size", "恢复大角色原始大小与位置", false)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        if view.commit_surface(0, cx, |doc| {
-                            store::set_f64(doc, &["mmd", "display_scale"], 82.);
-                            store::set_f64(doc, &["mmd", "position_x"], 50.);
-                            store::set_f64(doc, &["mmd", "position_y"], 50.);
-                            store::set_bool(doc, &["mmd", "keep_hud_clear"], false);
-                        }) {
-                            view.editor = Some(SurfaceEditor::new(Surface::SongSelect, view.store.config(), window, cx));
-                        }
-                    })))
-                .child(field_row(editor, SurfaceTextField::MmdDisplayScale, "显示大小（10–100%）", false, cx))
-                .child(field_row(editor, SurfaceTextField::MmdPositionX, "水平中心（0 左 → 100 右）", false, cx))
-                .child(field_row(editor, SurfaceTextField::MmdPositionY, "垂直中心（0 上 → 100 下）", false, cx))
-                .child(h_flex().gap_3().child("大角色避开顶栏与底栏").child(Switch::new("mmd-hud-clear")
-                    .checked(config.mmd.keep_hud_clear).on_change(cx.listener(|view, value, _, cx| {
-                        view.commit_surface(0, cx, |doc| store::set_bool(doc, &["mmd", "keep_hud_clear"], *value));
-                    }))))
-                .child(div().text_sm().text_color(theme::muted_ink()).child("大角色位置相对于原角色区域；避让开启时限制大小与位置。原始大小预设保留先前布局，歌曲详情仍在前景。"))
-                .child(h_flex().gap_3().child("选曲 Qpro 替换为小 MMD").child(Switch::new("mmd-qpro")
-                    .checked(config.mmd.replace_qpro).on_change(cx.listener(|view, value, _, cx| {
-                        view.commit_surface(0, cx, |doc| store::set_bool(doc, &["mmd", "replace_qpro"], *value));
-                    }))))
-                .child(field_row(editor, SurfaceTextField::MmdQproHeight, "小 MMD 显示范围（100–800）", false, cx))
-                .child(div().text_sm().text_color(theme::muted_ink()).child("小角色跟随原 Qpro 位置，与大角色共享模型和动作；大小独立。仅普通选曲生效。关闭下方的大角色开关可只显示小角色。"));
-            let mut rate = h_flex().gap_3().child("角色帧率");
-            for fps in [30, 60] {
-                rate = rate.child(
-                    widgets::segment_button(
-                        SharedString::from(format!("mmd-fps-{fps}")),
-                        if fps == 30 { "30 fps" } else { "60 fps" },
-                        config.mmd.fps == fps,
-                    )
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.commit_surface(0, cx, |doc| {
-                            store::set_u64(doc, &["mmd", "fps"], fps.into())
-                        });
-                    })),
-                );
-            }
-            body = body.child(rate).child(
-                h_flex()
-                    .gap_3()
-                    .child("响应滚动与上次成绩（A / AA / AAA）")
-                    .child(
-                        Switch::new("mmd-reactions")
-                            .checked(config.mmd.reactions)
-                            .on_change(cx.listener(|view, checked, _, cx| {
-                                view.commit_surface(0, cx, |doc| {
-                                    store::set_bool(doc, &["mmd", "reactions"], *checked)
-                                });
-                            })),
-                    ),
-            );
-            if config.mmd.reactions {
-                body = body
-                    .child(field_row(editor,SurfaceTextField::MmdScrollUp,"向上搓盘 / 抬头 VMD",true,cx))
-                    .child(field_row(editor,SurfaceTextField::MmdScrollDown,"向下搓盘 / 低头 VMD",true,cx))
-                    .child(field_row(editor,SurfaceTextField::MmdHappyMotion,"A / AA / AAA 后 VMD",true,cx))
-                    .child(field_row(editor,SurfaceTextField::MmdOtherResult,"B～F 后 VMD",true,cx))
-                    .child(div().text_sm().text_color(theme::muted_ink()).child("选曲时读取转盘方向，触发对应动作，播放一次后回到平时循环。留空则继续平时动作。自定义动作期间不叠加自动转头。成绩动作在返回选曲时触发，并优先于转盘动作。"))
-                    .child(h_flex().gap_3().child("反转转盘动作方向").child(
-                        Switch::new("mmd-scratch-reverse")
-                            .checked(config.mmd.scratch_reverse)
-                            .on_change(cx.listener(|view, checked, _, cx| {
-                                view.commit_surface(0, cx, |doc| {
-                                    store::set_bool(doc, &["mmd", "scratch_reverse"], *checked)
-                                });
-                            })),
-                    ));
-            }
-            body=body.child(field_row(editor,SurfaceTextField::MmdLook,"转头骨骼名",false,cx))
-                .child(field_row(editor,SurfaceTextField::MmdLookYaw,"向右看角度（度）",false,cx))
-                .child(field_row(editor,SurfaceTextField::MmdLookHold,"停止滚动后保持（秒）",false,cx))
-                .child(field_row(editor,SurfaceTextField::MmdHappy,"开心表情名",false,cx))
-                .child(field_row(editor,SurfaceTextField::MmdBlink,"眨眼表情名",false,cx))
-                .child(div().text_sm().text_color(theme::muted_ink()).child("名称须与模型一致，留空可禁用该动作。当前不模拟刚体 / 布料物理，也不执行 MME 特效。导入失败时保留原角色。"));
-        }
-        body = body
-            .child(
-                h_flex()
-                    .gap_3()
-                    .child(div().text_base().child("显示选曲角色"))
-                    .child(
-                        Switch::new("frame-chara")
-                            .checked(config.selection.frame_chara)
-                            .on_change(cx.listener(|view, checked, _, cx| {
-                                view.commit_surface(0, cx, |doc| {
-                                    store::set_bool(doc, &["selection", "frame_chara"], *checked)
-                                });
-                            })),
-                    ),
-            )
-            .child(field_row(
-                editor,
-                SurfaceTextField::FrameCharaImage,
-                "角色图片",
-                true,
-                cx,
-            ))
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme::muted_ink())
-                    .child("提供透明背景的人物图片即可；自动去除透明空白，并适配原生角色位置。"),
-            );
-    }
-    body = body.child(div().text_sm().text_color(theme::muted_ink()).child("自动保存。下次进入组件时生效；随机媒体在一次访问中保持不变。视频静音循环，预览显示首帧。"))
-        .child(Button::new("refresh-preview").large().outline().label("刷新预览").on_click(cx.listener(move |view, _, _, cx| view.refresh_surface(surface, cx))));
-    if custom_artwork.is_some() {
-        if view.catalog.preview_loading {
-            body = body.child(div().child("正在准备素材预览…"));
-        }
-        if let Some(error) = &view.catalog.preview_error {
-            body = body.child(div().child(error.clone()));
-        }
-        if let Some(image) = &view.catalog.preview {
-            body = body.child(
-                div()
-                    .text_sm()
-                    .child("媒体预览；游戏内按原素材尺寸裁切，并保留原生动画。"),
-            );
-            body = body.child(
-                gpui::img(image.clone())
-                    .w_full()
-                    .max_h(px(260.))
-                    .object_fit(gpui::ObjectFit::Contain),
-            );
-        }
-    }
-    div()
-        .id("surface-editor-overlay")
-        .absolute()
-        .inset_0()
-        .bg(theme::overlay())
-        .flex()
-        .items_center()
-        .justify_center()
-        .p_4()
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|view, _, _, cx| view.close_editor(cx)),
-        )
-        .child(
-            v_flex()
-                .id("surface-editor")
-                .w(px(
-                    (window.viewport_size().width.as_f32() - 32.).clamp(480., 960.)
-                ))
-                .h(px(
-                    (window.viewport_size().height.as_f32() - 48.).clamp(360., 900.)
-                ))
-                .bg(theme::card_bg())
-                .border_1()
-                .border_color(theme::line())
-                .overflow_hidden()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(
-                    h_flex()
-                        .p_7()
-                        .gap_6()
-                        .items_center()
-                        .border_b_1()
-                        .border_color(theme::line())
-                        .child(
-                            div().flex_1().text_2xl().font_semibold().child(
-                                view.artwork_editor
-                                    .map(|index| view.store.config().artwork[index].texture.clone())
-                                    .unwrap_or_else(|| theme::surface_title(surface).to_owned()),
-                            ),
-                        )
-                        .child(
-                            Switch::new("surface-enabled")
-                                .checked(config.surface_enabled(surface))
-                                .on_change(cx.listener(move |view, checked, _, cx| {
-                                    view.set_surface_enabled(surface, *checked, cx)
-                                })),
-                        )
-                        .child(
-                            widgets::close_button("editor-close")
-                                .on_click(cx.listener(|view, _, _, cx| view.close_editor(cx))),
-                        ),
-                )
-                .child(body),
-        )
-        .into_any_element()
+    pages::render(view, editor, window, cx)
 }

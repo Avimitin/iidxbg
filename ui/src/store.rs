@@ -227,6 +227,44 @@ pub fn set_bool(doc: &mut DocumentMut, path: &[&str], value: bool) {
     set_value(doc, path, Value::from(value));
 }
 
+pub fn set_character_source(doc: &mut DocumentMut, source: iidxbg::config::CharacterSource) {
+    set_string(
+        doc,
+        &["selection", "frame_chara_source"],
+        character_source_key(source),
+    );
+    if source == iidxbg::config::CharacterSource::Mmd {
+        set_bool(doc, &["mmd", "enabled"], true);
+    }
+}
+
+fn character_source_key(source: iidxbg::config::CharacterSource) -> &'static str {
+    use iidxbg::config::CharacterSource;
+    match source {
+        CharacterSource::Auto => "auto",
+        CharacterSource::Stock => "stock",
+        CharacterSource::Image => "image",
+        CharacterSource::Mmd => "mmd",
+    }
+}
+
+pub fn set_qpro(
+    doc: &mut DocumentMut,
+    enabled: bool,
+    current_character: iidxbg::config::CharacterSource,
+) {
+    // Resolve legacy auto before enabling MMD: Qpro must not change the main character.
+    set_string(
+        doc,
+        &["selection", "frame_chara_source"],
+        character_source_key(current_character),
+    );
+    set_bool(doc, &["mmd", "replace_qpro"], enabled);
+    if enabled {
+        set_bool(doc, &["mmd", "enabled"], true);
+    }
+}
+
 pub fn set_string(doc: &mut DocumentMut, path: &[&str], value: &str) {
     set_value(doc, path, string_value(value));
 }
@@ -340,6 +378,38 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qpro_switch_preserves_legacy_stock_image_and_explicit_main_source() {
+        use iidxbg::config::CharacterSource;
+        for image in ["", "saved-character.png"] {
+            let (dir, path) = fixture_path();
+            let mut store = ConfigStore::load(&path).unwrap();
+            assert!(store.edit(|doc| set_string(doc, &["selection", "frame_chara_image"], image)));
+            let main = store.config().character_source();
+            assert!(store.edit(|doc| set_qpro(doc, true, main)));
+            assert_eq!(store.config().character_source(), main);
+            assert!(!store.config().uses_mmd_character());
+            assert!(store.config().uses_mmd());
+            for source in [
+                CharacterSource::Mmd,
+                CharacterSource::Stock,
+                CharacterSource::Image,
+            ] {
+                assert!(store.edit(|doc| set_character_source(doc, source)));
+                assert!(store.config().mmd.replace_qpro);
+                assert_eq!(
+                    store.config().selection.frame_chara_image,
+                    PathBuf::from(image)
+                );
+            }
+            assert!(store.edit(|doc| set_qpro(doc, false, CharacterSource::Image)));
+            assert_eq!(store.config().character_source(), CharacterSource::Image);
+            assert!(!store.config().uses_mmd());
+            fs::remove_file(path).unwrap();
+            fs::remove_dir(dir).unwrap();
+        }
+    }
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const FIXTURE: &str = include_str!("testdata/minimal.toml");
