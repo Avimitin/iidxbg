@@ -1,5 +1,6 @@
 //! Shared verified ABI; native addresses/layouts come from exact-build profiles.
 mod reactions;
+mod session;
 mod surfaces;
 use crate::{
     Error, Result,
@@ -588,7 +589,7 @@ unsafe extern "system" fn background_hook(this: usize, tick: u32) -> usize {
         surfaces::artwork_result_visit(this - n.profile.layout.scene_background, true);
     }
     let result = unsafe { original(this, tick) };
-    if !ENABLED.load(Ordering::Acquire) || !READY.load(Ordering::Acquire) {
+    if !ENABLED.load(Ordering::Acquire) || !READY.load(Ordering::Acquire) || !session::ready() {
         return result;
     }
     boundary(|| {
@@ -912,7 +913,8 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                 ),
             );
         }
-        let config = Config::load(&config_path)?;
+        let mut document = Config::load(&config_path)?;
+        let config = document.for_user(None);
         HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
         let mut character = crate::character::LocalImage::default();
         let mut providers = Providers::new(config)?;
@@ -922,6 +924,9 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
         // Keep lifecycle hooks active even while configured off, so subsequent
         // visits can request a reload and re-enable without reinstalling hooks.
         attach(&root)?;
+        session::start(config_path.clone())?;
+        let mut context = 0;
+        let mut selected_user: Option<String> = None;
         log(
             &root,
             &format!(
@@ -957,13 +962,52 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
             let generation = REQUEST.load(Ordering::Acquire);
             let new_event = generation != configured;
             if new_event {
-                reload_request(&root, &config_path, &mut providers, &mut character);
+                match Config::load(&config_path) {
+                    Ok(config) => document = config,
+                    Err(error) => log(&root, &format!("Configuration reload rejected: {error}")),
+                }
+                let (mut current, login) = session::snapshot();
+                let user = document
+                    .user_for_session(&login.cards, &login.joined)
+                    .map(str::to_owned);
+                if current == context && user != selected_user {
+                    let Some(rebound) = session::rebind(current) else {
+                        request_images();
+                        continue;
+                    };
+                    current = rebound;
+                }
+                let changed = current != context;
+                if changed {
+                    images = Default::default();
+                    let _ = character.mmd.refresh(&providers.config().mmd, &root, false);
+                    character = crate::character::LocalImage::default();
+                    *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(Pending::Disabled);
+                    surfaces::publish(&images);
+                    surfaces::publish_artwork(Vec::new());
+                    surfaces::publish_character(None);
+                    next_attempt = Instant::now();
+                    context = current;
+                    selected_user = user;
+                }
+                let effective = document.for_user(selected_user.as_deref());
+                if let Err(error) = providers.configure(effective, !changed) {
+                    // A different user may never inherit the previous user's provider.
+                    if changed {
+                        return Err(error);
+                    }
+                    log(&root, &format!("Configuration providers rejected: {error}"));
+                }
+                refresh_character(&root, &providers, &mut character);
+                session::prepared(context);
                 configured = generation;
             }
             if generation != completed && Instant::now() >= next_attempt {
                 if !new_event {
                     // A failed/deferred image request gets a fresh snapshot on retry.
-                    reload_request(&root, &config_path, &mut providers, &mut character);
+                    // Retry through the same complete configuration/session resolver.
+                    request_images();
+                    continue;
                 }
                 let mut failed = false;
                 let config = providers.config().clone();
@@ -979,13 +1023,8 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                         needed[roots[surface.index()].index()] = true;
                     }
                 }
-                for art in &config.artwork {
-                    if art.enabled
-                        && let Some(surface) = art.source.bind
-                    {
-                        needed[roots[surface.index()].index()] = true;
-                    }
-                }
+                // Direct artwork resolves its bindings through global providers;
+                // it must not request a personal module's source here.
                 // Prepare each binding root exactly once. Bound consumers receive
                 // the same Arc, random choice, decoder and GPU cache identity.
                 for root_surface in Surface::ALL {
@@ -1063,8 +1102,8 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
                         30
                     });
             }
-            // Sleep until a hook/log/shutdown wakes us. Only an outstanding
-            // preparation request schedules a timeout; there is no file watcher.
+            // Sleep until a hook/log/session observer/shutdown wakes us. Only
+            // an outstanding preparation request schedules a worker timeout.
             if REQUEST.load(Ordering::Acquire) != completed {
                 thread::park_timeout(next_attempt.saturating_duration_since(Instant::now()));
             } else {
@@ -1087,6 +1126,7 @@ fn worker(root: PathBuf, rx: mpsc::Receiver<Event>) {
 }
 
 /// Called only for a scene request or its deferred/retry preparation.
+#[cfg(test)]
 fn reload_request(
     root: &Path,
     path: &Path,
@@ -1101,6 +1141,14 @@ fn reload_request(
             &format!("Configuration reload rejected: {e}; keeping last valid settings"),
         ),
     }
+    refresh_character(root, providers, character);
+}
+
+fn refresh_character(
+    root: &Path,
+    providers: &Providers,
+    character: &mut crate::character::LocalImage,
+) {
     let config = providers.config();
     HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
     PREMIUM_AREA_ENABLED.store(providers.enabled(Surface::PremiumArea), Ordering::Release);
@@ -1181,6 +1229,8 @@ extern "C" fn graphics(event_id: u32, _: *const Frame, _: *mut c_void) {
         if event_id == 0 {
             OWNER.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
             READY.store(true, Ordering::Release);
+        } else if event_id == 1 {
+            session::graphics();
         } else if event_id == 2 || event_id == 3 {
             READY.store(false, Ordering::Release);
             if let Some(n) = NATIVE.get() {

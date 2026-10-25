@@ -6,6 +6,42 @@ use crate::profile::{Layout, LibraryProfile, Profile, Table, native_entries, off
 
 pub(super) fn profile() -> Profile {
     let (rvas, guards) = native_entries(&[
+        // Read-only login globals; docs/user-sessions.md. No new detours.
+        (
+            "session_initialized",
+            0x5b6790,
+            "833d5159ac00007411833d4c59ac0000",
+        ),
+        (
+            "session_card_set",
+            0x59ec80,
+            "48895c240848896c2410488974241857",
+        ),
+        (
+            "session_card_format",
+            0x591020,
+            "4883ec28e86757020085c0740ab80100",
+        ),
+        (
+            "session_clear",
+            0x59d220,
+            "4883ec28e86795010085c075254863c1",
+        ),
+        (
+            "session_ready",
+            0x59ebc0,
+            "4883ec28e8c77b010085c075484863c9",
+        ),
+        (
+            "session_joined",
+            0x92fd00,
+            "85c9781783f90273124863c1488d0d9d",
+        ),
+        (
+            "session_leave",
+            0x92ffa0,
+            "83f90177114863c1488d0d01b4cd0ac7",
+        ),
         // Native Qpro selection component; docs/iidx34-mmd-qpro.md.
         ("qpro_manager", 0x806020, "488d05d9a2910ac3cccccccccccccccc"),
         ("qpro_player", 0x805070, "48895c2408574883ec204863da488bf9"),
@@ -306,6 +342,13 @@ pub(super) fn profile() -> Profile {
         ("line_update", 0x33bb10, "448b49084585c974218b4118488d5128"),
     ]);
     Profile {
+        session: Some(crate::session::Layout {
+            initialized: 0x107c0e8,
+            joined: 0xb60b3b0,
+            identity: 0x70f2e00,
+            ready: 0x32b34d8,
+            stride: 0x3e66db8,
+        }),
         artwork_library: Some({
             let (rvas, guards) = native_entries(&[
                 ("shape_id", 0x119b0, "40534883ec20488bda8bd1488d0d3e3a"),

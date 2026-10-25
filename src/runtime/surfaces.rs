@@ -80,6 +80,7 @@ fn state() -> Option<MutexGuard<'static, Surfaces>> {
 
 fn can_render() -> bool {
     ENABLED.load(Ordering::Acquire)
+        && session::ready()
         && READY.load(Ordering::Acquire)
         && unsafe { GetCurrentThreadId() } == OWNER.load(Ordering::Acquire)
 }
@@ -1511,6 +1512,28 @@ pub(super) fn invalidate() {
     } else {
         ENABLED.store(false, Ordering::Release);
         event(Event::Fault("surface invalidation reentry"));
+    }
+}
+
+pub(super) fn clear_session() -> bool {
+    invalidate();
+    if !artwork::clear_session() {
+        return false;
+    }
+    if let Some(mut s) = state() {
+        s.select_choice = None;
+        s.frame_chara.image = None;
+        s.premium_area.image = None;
+        s.concentration.image = None;
+        for cover in &mut s.covers {
+            cover.choice = None;
+        }
+        for graph in &mut s.graphs {
+            graph.choice = None;
+        }
+        true
+    } else {
+        false
     }
 }
 

@@ -1,10 +1,38 @@
 //! Session material is never serialized into TOML or sent to media CDNs.
-use super::{Account, Api, err};
+use super::{Api, err};
 use crate::Result;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
-#[derive(Default, Serialize, Deserialize)]
+/// Runtime-only identity. A configuration and its stable user ID own one login.
+/// The canonical configuration path is supplied by the config loader; display
+/// names and card bindings may change without changing the account binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountKey([u8; 32]);
+impl AccountKey {
+    pub(crate) fn new(config_path: &Path, user: &str) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        hash.update(config_path.as_os_str().as_encoded_bytes());
+        hash.update([0]);
+        hash.update(user.as_bytes());
+        Self(hash.finalize().into())
+    }
+    pub(super) fn cache_key(&self) -> String {
+        hex::encode(self.0)
+    }
+    fn path_in(&self, root: &Path) -> PathBuf {
+        root.join("bilibili-users")
+            .join(format!("{}.dat", self.cache_key()))
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Session {
     cookies: BTreeMap<String, String>,
 }
@@ -102,22 +130,24 @@ impl Api {
         }
     }
 }
-fn session_path() -> Result<PathBuf> {
+fn session_root() -> Result<PathBuf> {
     Ok(PathBuf::from(
         std::env::var_os("LOCALAPPDATA").ok_or_else(|| err("找不到 Windows 用户数据目录"))?,
     )
-    .join("iidxbg")
-    .join("bilibili-session.dat"))
+    .join("iidxbg"))
 }
-pub fn load() -> Result<Session> {
-    let path = session_path()?;
+pub fn load(account: &AccountKey) -> Result<Session> {
+    load_in(&session_root()?, account)
+}
+fn load_in(root: &Path, account: &AccountKey) -> Result<Session> {
+    let path = account.path_in(root);
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Session::default()),
         Err(e) => return Err(e.into()),
     };
     let encrypted = crate::pixels::read_bounded(file, 64 * 1024)?;
-    let bytes = protect(&encrypted, false)?;
+    let bytes = protect(&encrypted, false, &account.0)?;
     let session: Session =
         serde_json::from_slice(&bytes).map_err(|_| err("保存的登录信息损坏，请重新登录"))?;
     // Revalidate before constructing any HTTP headers.
@@ -127,31 +157,34 @@ pub fn load() -> Result<Session> {
     }
     Ok(checked)
 }
-pub fn save(session: Session) -> Result<Account> {
-    let account = Api::new(Session {
-        cookies: session.cookies.clone(),
-    })?
-    .account()?;
+/// Store a session already verified by the account worker.
+pub fn save(account: &AccountKey, session: &Session) -> Result<()> {
+    save_in(&session_root()?, account, session)
+}
+fn save_in(root: &Path, account: &AccountKey, session: &Session) -> Result<()> {
     let bytes = serde_json::to_vec(&session)?;
-    let encrypted = protect(&bytes, true)?;
-    let path = session_path()?;
+    let encrypted = protect(&bytes, true, &account.0)?;
+    let path = account.path_in(root);
     let dir = path.parent().unwrap();
     fs::create_dir_all(dir)?;
     let mut temp = tempfile::NamedTempFile::new_in(dir)?;
     temp.write_all(&encrypted)?;
     temp.as_file().sync_all()?;
     temp.persist(path).map_err(|e| e.error)?;
-    Ok(account)
+    Ok(())
 }
-pub fn logout() -> Result<()> {
-    match fs::remove_file(session_path()?) {
+pub fn logout(account: &AccountKey) -> Result<()> {
+    logout_in(&session_root()?, account)
+}
+fn logout_in(root: &Path, account: &AccountKey) -> Result<()> {
+    match fs::remove_file(account.path_in(root)) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
     }
 }
 #[cfg(windows)]
-fn protect(data: &[u8], encrypt: bool) -> Result<Vec<u8>> {
+fn protect(data: &[u8], encrypt: bool, account: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
         Security::Cryptography::{
@@ -166,13 +199,17 @@ fn protect(data: &[u8], encrypt: bool) -> Result<Vec<u8>> {
         cbData: 0,
         pbData: std::ptr::null_mut(),
     };
+    let entropy = CRYPT_INTEGER_BLOB {
+        cbData: account.len() as u32,
+        pbData: account.as_ptr() as *mut u8,
+    };
     // DPAPI defaults to current-user protection, deliberately not LOCAL_MACHINE.
     unsafe {
         let ok = if encrypt {
             CryptProtectData(
                 &input,
                 std::ptr::null(),
-                std::ptr::null(),
+                &entropy,
                 std::ptr::null(),
                 std::ptr::null(),
                 CRYPTPROTECT_UI_FORBIDDEN,
@@ -182,7 +219,7 @@ fn protect(data: &[u8], encrypt: bool) -> Result<Vec<u8>> {
             CryptUnprotectData(
                 &input,
                 std::ptr::null_mut(),
-                std::ptr::null(),
+                &entropy,
                 std::ptr::null(),
                 std::ptr::null(),
                 CRYPTPROTECT_UI_FORBIDDEN,
@@ -201,7 +238,7 @@ fn protect(data: &[u8], encrypt: bool) -> Result<Vec<u8>> {
     }
 }
 #[cfg(not(windows))]
-fn protect(_: &[u8], _: bool) -> Result<Vec<u8>> {
+fn protect(_: &[u8], _: bool, _: &[u8]) -> Result<Vec<u8>> {
     Err(err("登录信息存储需要 Windows DPAPI"))
 }
 
@@ -227,9 +264,38 @@ mod tests {
     #[test]
     fn dpapi_roundtrip_and_reject_corrupt_data() {
         let secret = b"test session fixture, not credentials";
-        let encrypted = protect(secret, true).unwrap();
+        let encrypted = protect(secret, true, b"alice").unwrap();
         assert_ne!(encrypted, secret);
-        assert_eq!(protect(&encrypted, false).unwrap(), secret);
-        assert!(protect(b"invalid", false).is_err());
+        assert_eq!(protect(&encrypted, false, b"alice").unwrap(), secret);
+        assert!(protect(&encrypted, false, b"bob").is_err());
+        assert!(protect(b"invalid", false, b"alice").is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn sessions_are_isolated_by_user_and_config_and_ignore_legacy_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let alice = AccountKey::new(Path::new("cabinet-a.toml"), "alice");
+        let bob = AccountKey::new(Path::new("cabinet-a.toml"), "bob");
+        let other = AccountKey::new(Path::new("cabinet-b.toml"), "alice");
+        let mut a = Session::default();
+        a.accept("SESSDATA=alice-fixture");
+        let mut b = Session::default();
+        b.accept("SESSDATA=bob-fixture");
+        fs::write(root.join("bilibili-session.dat"), b"unused legacy session").unwrap();
+        assert!(!load_in(root, &alice).unwrap().authenticated());
+        save_in(root, &alice, &a).unwrap();
+        assert!(!load_in(root, &bob).unwrap().authenticated());
+        assert!(!load_in(root, &other).unwrap().authenticated());
+        save_in(root, &bob, &b).unwrap();
+        assert_eq!(load_in(root, &alice).unwrap().cookie(), a.cookie());
+        assert_eq!(load_in(root, &bob).unwrap().cookie(), b.cookie());
+        // Even copying ciphertext cannot silently attach Alice's session to Bob.
+        fs::copy(alice.path_in(root), other.path_in(root)).unwrap();
+        assert!(load_in(root, &other).is_err());
+        logout_in(root, &alice).unwrap();
+        assert!(!load_in(root, &alice).unwrap().authenticated());
+        assert_eq!(load_in(root, &bob).unwrap().cookie(), b.cookie());
+        assert!(root.join("bilibili-session.dat").exists());
     }
 }

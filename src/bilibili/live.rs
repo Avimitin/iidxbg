@@ -161,13 +161,14 @@ fn group(p: &Playlist, next: Option<u64>) -> Option<(usize, usize)> {
 
 pub struct Stream {
     room: u64,
+    account: Option<super::auth::AccountKey>,
     client: Client,
     address: Option<Url>,
     init: Option<(Url, Vec<u8>)>,
     next: Option<u64>,
 }
 impl Stream {
-    pub fn new(room: u64) -> Result<Self> {
+    pub fn new(room: u64, account: Option<super::auth::AccountKey>) -> Result<Self> {
         let client = Client::builder()
             .https_only(true)
             .timeout(Duration::from_secs(8))
@@ -184,6 +185,7 @@ impl Stream {
             .map_err(network)?;
         Ok(Self {
             room,
+            account,
             client,
             address: None,
             init: None,
@@ -196,7 +198,7 @@ impl Stream {
         self.next = None;
     }
     fn resolve(&self) -> Result<Url> {
-        let api = Api::saved()?;
+        let api = Api::saved(self.account.as_ref())?;
         let data = Api::data(api.response(
             "api.live.bilibili.com",
             "/xlive/web-room/v2/index/getRoomPlayInfo",

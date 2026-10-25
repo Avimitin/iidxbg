@@ -12,6 +12,7 @@ mod iidx34_010_20260917;
 
 #[derive(Serialize)]
 pub struct Profile {
+    pub session: Option<crate::session::Layout>,
     pub label: String,
     pub sha256: String,
     pub image_size: usize,

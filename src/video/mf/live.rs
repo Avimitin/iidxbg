@@ -191,7 +191,12 @@ fn decode(
     }
 }
 
-pub fn load_live(room: u64, width: u32, height: u32) -> Result<Arc<Video>> {
+pub fn load_live(
+    room: u64,
+    width: u32,
+    height: u32,
+    account: Option<crate::bilibili::auth::AccountKey>,
+) -> Result<Arc<Video>> {
     let (tx, rx) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name("iidxbg-live-decode".into())
@@ -199,7 +204,7 @@ pub fn load_live(room: u64, width: u32, height: u32) -> Result<Arc<Video>> {
             priority();
             let setup = || -> Result<_> {
                 let platform = Platform::start()?;
-                let mut stream = Stream::new(room)?;
+                let mut stream = Stream::new(room, account)?;
                 let deadline = Instant::now() + Duration::from_secs(18);
                 let chunk = loop {
                     if Instant::now() >= deadline {

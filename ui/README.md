@@ -6,9 +6,27 @@ binary; the plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
 
 ## What it does
 
-- Icon sidebar for display components, Bilibili login and all artwork.
-- Scrollable adjacent mosaic with sixteen independent components, including
-  title, login, mode selection, gameplay bottom frame and logout summary.
+- Bottom-left user menu: compact scrollable rows, name/card keyword search,
+  current user pinned first in green, one-click switching, inline creation with
+  a plus button or Enter, and a settings shortcut on each row. No legacy import.
+- The selected user is independent of the page. **用户与卡片** groups rename/delete,
+  multiple card bindings, live P1/P2 capture and that user's Bilibili binding.
+  Switching users switches credentials and favourites and cancels pending QR login.
+  Shared pre-login modules never use a user's Bilibili account.
+- Compact regular-weight title bar with a single-click **游戏素材** button.
+  Title/login preview cards are pinned above the shared artwork catalog.
+  The page works without users and has no user header or management shortcut.
+  Closing an editor or switching users keeps its shared scope. Direct asset
+  replacements apply to everyone; unbound cards and guests keep stock user modules.
+  New user modules start disabled. See [user sessions](../docs/user-sessions.md).
+- All buttons have transparent backgrounds, with color and border feedback.
+  Sidebar icons use color alone for selection, without background blocks.
+  The account page omits its redundant management shortcut. **重新读取配置**
+  reloads the configuration file and previews after external edits; UI edits auto-save.
+- Display components retain the scrollable adjacent mosaic, with permanent white
+  names in small, light text, outlined and shadowed in black. Module hover popups
+  are removed; preview errors remain visible in the editor. Help is in tooltips beside section titles
+  and controls; errors and active states remain visible.
 - All artwork has an on-demand installation scan, a visible cache path and an
   Open Cache Directory button. No scan runs merely from opening the page.
 - Every surface, including results, has an independent enable switch.
@@ -20,13 +38,15 @@ binary; the plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
   Cycles are rejected before saving. Unbinding restores independent settings.
 - Built-in Konachan/Yande.re endpoints and custom post.json URLs are supported.
   Custom APIs may use explicitly listed CDN hostnames. API downloads remain images.
-- Module settings use a persistent category sidebar, settings search and a fixed
+- Module settings open with **设置**, with **媒体来源** visible only for
+  **单独设置**. Shared modules hide that page and its search destinations.
+  Download, API and model tuning controls are integrated into **设置**; there
+  is no separate advanced page. Settings use category navigation, search and a fixed
   save/error footer. On narrow windows, categories wrap above the form. Ctrl+F
   focuses search; Escape clears search first, then closes the editor.
-- Song selection has separate pages for media, display/sharing, the large
-  character, Qpro, MMD model/dance, reactions and advanced options. Ordinary
-  modules show only media, display/sharing and advanced pages. Provider controls
-  follow the selected source; BPM and reaction details appear when enabled.
+- Song selection also has pages for the large character, Qpro, MMD model/dance
+  and reactions. Ordinary modules show settings and, when independent, media.
+  Provider controls follow the selected source; BPM and reaction details appear when enabled.
 - Large-character source is independent of Qpro: stock or a custom image can
   remain on the left while Qpro uses PMX. Both can also use MMD. MMD consumers
   share the imported model/motions, with separate placement sizes. Source changes
@@ -121,18 +141,55 @@ The design borrows category navigation and search destinations from
 [VS Code settings](https://code.visualstudio.com/docs/configure/settings), and
 separates routine controls from specialized options as in
 [OBS settings](https://obsproject.com/kb/obs-studio-overview). Here, searches open
-a relevant category, provider controls follow the selected source, and advanced
-model/download options have their own page. Existing automatic saving remains.
+a relevant category, provider controls follow the selected source, and model/download options
+share the settings page. Existing automatic saving remains.
 
 ## Source layout
 
 | Path | Role |
 |---|---|
 | `src/app.rs` | model, window/theme setup, custom title bar, preview scheduling and copy rules |
-| `src/gallery.rs` | full-bleed Metro grid, hover details, preview modules |
+| `src/gallery.rs` | adjacent mosaic, permanent outlined labels and preview modules |
 | `src/editor.rs` | editor input state, validation, media pickers and bindings |
 | `src/editor/pages.rs` | category layout, search destinations and contextual controls |
 | `src/store.rs` | comment-preserving TOML load/edit/validate/atomic write |
 | `src/preview.rs` | provider worker, fingerprints, BGRA→GPUI images, placeholders |
 | `src/theme.rs` | type scale, colors, responsive layout metrics |
 | `src/widgets.rs` | small shared GPUI Kit-based building blocks |
+| `assets/iidxbg.ico`, `assets/app.rc`, `build.rs` | bundled multi-resolution Windows icon (resource 1, also used by GPUI) |
+| `scripts/generate-icon.ps1` | original vector geometry and reproducible 16–256 px ICO generation |
+
+## Multi-user UI verification (2026-10-25)
+
+Core: 87 tests passed / 7 optional tests ignored. UI: 36 passed / 1 optional
+scan test ignored. Both crates passed Clippy with warnings denied, formatting
+checks and release builds. The refactor includes per-user Bilibili credential
+routing in providers and live transport; it introduces no native hooks, RVAs or
+ABI changes. Session tests cover separate users/config files, ignoring legacy
+credentials, DPAPI rejection of copied ciphertext, logout isolation, anonymous
+pre-login sources and rejecting stale QR/account UI responses.
+
+Windows UI checks used isolated configurations under ignored
+`target/multi-user-ui`, including an empty configuration and 24 synthetic users.
+At 200% scaling (2100×1450 and 1650×1200 windows), checks covered creation with
+the plus button, name search and Enter selection, current-user ordering,
+scrolling without moving the underlying gallery, per-row settings, card binding,
+deleting the final user and shared pre-login edits. Follow-up checks covered
+single physical clicks on the title-bar assets button, title/login preview cards,
+remaining in the shared page after closing editors, user switching and reload,
+and saving artwork bindings/masks globally without touching either user record.
+Normal, hovered, selected and disabled buttons have transparent backgrounds;
+dark mode is loaded before applying the custom palette so it cannot replace it.
+Saved TOML confirmed that unrelated users were unchanged. The final editor was
+checked for Settings-first navigation, hiding/restoring Media when binding and
+unbinding, Escape dismissal, smaller light module labels, removed module-page
+headers and the concise top-bar assets entry. The built executable includes nine
+icon sizes in resource group 1; the Windows window class loads the icon. A two-user
+fixture with a deliberately corrupt session verified account switching and local
+unbind without affecting the other user's state. No real Bilibili login was changed;
+credential-storage tests use temporary fixture sessions. Actual in-game testing
+was **not** performed for this refactor.
+
+Final Windows checks also confirmed that module hover keeps only the border
+feedback, sidebar icons have no selected/hover background, the account page
+omits its own management shortcut, and the reload button reads **重新读取配置**.

@@ -10,7 +10,7 @@ use gpui::{
     SharedString, Styled, Window, div, img, prelude::FluentBuilder as _, px, relative,
 };
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{StyledExt, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{Sizable, StyledExt, TitleBar, button::ButtonVariants, h_flex, v_flex};
 use gpui_kit::*;
 use iidxbg::config::Surface;
 use toml_edit::DocumentMut;
@@ -31,6 +31,13 @@ pub(crate) enum PreviewStatus {
     Ready,
     Failed,
     Disabled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Page {
+    Surfaces,
+    Assets,
+    Account,
 }
 
 pub(crate) struct PreviewSlot {
@@ -60,22 +67,23 @@ impl Default for PreviewSlot {
 }
 
 pub struct AppView {
+    pub(crate) users: crate::users::State,
+    pub(crate) page: Page,
     pub(crate) bili: crate::bilibili::State,
-    pub(crate) bili_page: bool,
-    pub(crate) artwork_page: bool,
     pub(crate) artwork_editor: Option<usize>,
     pub(crate) catalog: crate::artwork::Catalog,
     pub(crate) store: ConfigStore,
     pub(crate) editor: Option<SurfaceEditor>,
     pub(crate) previews: [PreviewSlot; Surface::COUNT],
     pub(crate) defaults: [Arc<RenderImage>; Surface::COUNT],
-    pub(crate) hovered_surface: Option<Surface>,
     jobs: Sender<PreviewRequest>,
     preview_sync_seq: u64,
 }
 
 impl AppView {
-    pub fn new(store: ConfigStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(mut store: ConfigStore, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let selected_user = crate::users::resolve_user(store.document_config(), None);
+        store.set_scope(crate::users::user_scope(selected_user.as_deref()));
         window.set_window_title("iidxbg 配置");
         let config = store.config().clone();
         let defaults: [Arc<RenderImage>; Surface::COUNT] = std::array::from_fn(|index| {
@@ -93,16 +101,15 @@ impl AppView {
         preview::spawn_worker(store.path().to_path_buf(), job_rx, outcome_tx);
 
         let mut this = Self {
-            bili: crate::bilibili::State::new(cx),
-            bili_page: false,
-            artwork_page: false,
+            users: crate::users::State::new(selected_user, window, cx),
+            page: Page::Surfaces,
+            bili: crate::bilibili::State::new(config.bilibili.account.clone(), cx),
             artwork_editor: None,
             catalog: crate::artwork::Catalog::new(window, cx),
             store,
             editor: None,
             previews: std::array::from_fn(|_| PreviewSlot::default()),
             defaults,
-            hovered_surface: None,
             jobs: job_tx,
             preview_sync_seq: 0,
         };
@@ -120,6 +127,7 @@ impl AppView {
         .detach();
 
         this.restore_catalog(cx);
+        this.watch_login(cx);
         this.schedule_preview_sync(cx, 120);
         this
     }
@@ -167,6 +175,8 @@ impl AppView {
         let Some(surface) = self.editor.as_ref().map(|e| e.surface) else {
             return;
         };
+        let scope = self.store.scope().clone();
+        let artwork = self.artwork_editor;
         let prompt = match field {
             SurfaceTextField::MediaPath => "选择图片或视频",
             SurfaceTextField::FrameCharaImage => "选择角色图片",
@@ -217,7 +227,10 @@ impl AppView {
             let value = path.to_string_lossy().into_owned();
             let _ = window_handle.update(cx, |_, window, app| {
                 let _ = this.update(app, |this, cx| {
-                    if this.editor.as_ref().is_some_and(|e| e.surface == surface) {
+                    if this.store.scope() == &scope
+                        && this.artwork_editor == artwork
+                        && this.editor.as_ref().is_some_and(|e| e.surface == surface)
+                    {
                         this.apply_picked_surface_directory(field, value, window, cx);
                     }
                 });
@@ -251,7 +264,6 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         self.artwork_editor = None;
-        self.hovered_surface = None;
         if self
             .editor
             .as_ref()
@@ -268,10 +280,14 @@ impl AppView {
     pub(crate) fn close_editor(&mut self, cx: &mut Context<Self>) {
         self.editor = None;
         self.artwork_editor = None;
+        self.select_scope(
+            crate::users::page_scope(self.page, self.users.selected.as_deref()),
+            cx,
+        );
         cx.notify();
     }
 
-    fn schedule_preview_sync(&mut self, cx: &mut Context<Self>, delay_ms: u64) {
+    pub(crate) fn schedule_preview_sync(&mut self, cx: &mut Context<Self>, delay_ms: u64) {
         self.preview_sync_seq = self.preview_sync_seq.wrapping_add(1);
         let sequence = self.preview_sync_seq;
         cx.spawn(async move |this, cx| {
@@ -288,7 +304,10 @@ impl AppView {
     }
 
     fn sync_previews(&mut self, cx: &mut Context<Self>) {
-        let specs = preview::specs(self.store.config());
+        let mut specs = preview::specs(self.store.config());
+        for spec in &mut specs {
+            spec.enabled &= self.store.accepts_surface(spec.surface);
+        }
         for spec in &specs {
             if !spec.enabled {
                 self.disable_slot(spec.surface, spec.fingerprint.clone());
@@ -346,6 +365,7 @@ impl AppView {
         fingerprint: PreviewFingerprint,
         cx: &mut Context<Self>,
     ) {
+        let config = self.store.config().clone();
         let index = surface.index();
         let slot = &mut self.previews[index];
         slot.generation = slot.generation.wrapping_add(1);
@@ -356,6 +376,7 @@ impl AppView {
         slot.error = None;
         slot.fingerprint = Some(fingerprint);
         let request = PreviewRequest {
+            config,
             surface,
             target,
             generation: slot.generation,
@@ -454,12 +475,11 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let overlay = self.render_editor_overlay(window, cx);
-        let content = if self.artwork_page {
-            self.render_artwork(window, cx)
-        } else if self.bili_page {
-            self.render_bilibili(cx)
-        } else {
-            self.render_gallery(window, cx)
+        let content = match self.page {
+            Page::Account => self.render_users(window, cx),
+            Page::Assets => self.render_assets(window, cx),
+            Page::Surfaces if self.users.selected.is_some() => self.render_gallery(window, cx),
+            Page::Surfaces => self.render_no_user(cx),
         };
         let sidebar = v_flex()
             .w(px(theme::SIDEBAR_WIDTH))
@@ -471,59 +491,92 @@ impl Render for AppView {
             .bg(theme::sidebar_bg())
             .border_r_1()
             .border_color(theme::line())
-            .child(
-                widgets::navigation_button(
-                    "page-surfaces",
-                    IconName::LayoutGrid,
-                    "显示组件",
-                    !self.bili_page && !self.artwork_page,
-                )
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.bili_page = false;
-                    view.artwork_page = false;
-                    view.editor = None;
-                    cx.notify();
-                })),
+            .children(
+                [
+                    (
+                        Page::Surfaces,
+                        "page-surfaces",
+                        IconName::LayoutGrid,
+                        "显示组件",
+                    ),
+                    (
+                        Page::Account,
+                        "page-account",
+                        IconName::Settings,
+                        "用户与卡片 · Bilibili",
+                    ),
+                ]
+                .map(|(page, id, icon, label)| {
+                    widgets::navigation_button(id, icon, label, self.page == page).on_click(
+                        cx.listener(move |view, _, window, cx| view.navigate(page, window, cx)),
+                    )
+                }),
             )
+            .child(div().flex_1())
             .child(
                 widgets::navigation_button(
-                    "page-bilibili",
-                    IconName::TvMinimalPlay,
-                    "Bilibili",
-                    self.bili_page,
+                    "user-switcher",
+                    IconName::User,
+                    "切换 / 创建用户",
+                    self.users.menu_open,
                 )
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.bili_page = true;
-                    view.artwork_page = false;
-                    view.editor = None;
-                    cx.notify();
-                })),
+                .on_click(cx.listener(|view, _, window, cx| view.toggle_user_menu(window, cx))),
             );
-        let sidebar = sidebar.child(
-            widgets::navigation_button(
-                "page-artwork",
-                IconName::Image,
-                "全部素材",
-                self.artwork_page,
-            )
-            .on_click(cx.listener(|view, _, _, cx| {
-                view.artwork_page = true;
-                view.bili_page = false;
-                view.editor = None;
-                view.artwork_editor = None;
-                cx.notify();
-            })),
-        );
-        let title_bar = TitleBar::new()
-            .h(px(theme::TITLE_BAR_HEIGHT))
-            .pl_6()
-            .bg(theme::sidebar_bg())
+        let header = h_flex()
+            .w_full()
+            .flex_shrink_0()
+            .px_4()
+            .py_3()
+            .gap_3()
+            .border_b_1()
             .border_color(theme::line())
+            .child(div().font_semibold().child(match self.page {
+                Page::Surfaces => "显示组件",
+                Page::Assets => "游戏素材",
+                Page::Account => "用户与卡片",
+            }))
             .child(
                 div()
-                    .text_size(px(18.))
-                    .font_semibold()
-                    .child("iidxbg 配置"),
+                    .flex_1()
+                    .min_w_0()
+                    .text_ellipsis()
+                    .overflow_hidden()
+                    .text_color(theme::accent())
+                    .when(self.page == Page::Account, |label| {
+                        label.child(self.selected_user_label())
+                    }),
+            )
+            .child(
+                widgets::button("reload-config")
+                    .ghost()
+                    .label("重新读取配置")
+                    .tooltip("从磁盘重新读取配置文件，用于同步外部修改")
+                    .on_click(cx.listener(|view, _, window, cx| view.reload_config(window, cx))),
+            );
+        let title_bar = TitleBar::new()
+            .h(px(theme::TITLE_BAR_HEIGHT))
+            .pl_4()
+            .bg(theme::sidebar_bg())
+            .border_color(theme::line())
+            .child(div().text_size(px(14.)).child("iidxbg"))
+            .child(
+                div()
+                    .id("assets-titlebar-control")
+                    .occlude()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        widgets::button("page-assets")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Image)
+                            .label("游戏素材")
+                            .when(self.page == Page::Assets, |button| {
+                                button.text_color(theme::accent())
+                            })
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.navigate(Page::Assets, window, cx)
+                            })),
+                    ),
             );
 
         v_flex()
@@ -534,14 +587,22 @@ impl Render for AppView {
             .text_color(theme::ink())
             .child(title_bar)
             .child(
-                h_flex()
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .child(sidebar)
-                    .child(v_flex().flex_1().min_w_0().h_full().child(content)),
+                h_flex().w_full().flex_1().min_h_0().child(sidebar).child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .when(self.page != Page::Surfaces, |view| view.child(header))
+                        .child(div().flex_1().min_h_0().w_full().child(content)),
+                ),
             )
+            .when_some(self.store.error(), |root, error| {
+                root.child(widgets::error_banner(error.to_owned()))
+            })
             .when_some(overlay, |this, overlay| this.child(overlay))
+            .when(self.users.menu_open, |this| {
+                this.child(self.render_user_menu(window, cx))
+            })
     }
 }
 

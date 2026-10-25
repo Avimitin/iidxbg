@@ -1,5 +1,24 @@
 # Version support
 
+User settings are now resolved from explicit multi-card user bindings before
+provider construction. Pre-login title/login modules have a separate cabinet
+scope. Unbound cards and guests keep stock user modules. A dedicated observer
+copies exact-build session globals, publishes a local UI heartbeat and notices
+config saves; it performs no graphics work. Identity changes clear prior-user
+CPU/GPU choices through separate worker/graphics-owner generations. Ordinary
+same-user edits preserve result visit freezing. See [user sessions](user-sessions.md)
+for schema, ownership, native hashes/RVAs and verification limits. This supersedes
+the earlier no-watcher/global-module descriptions below.
+
+Direct game-resource replacements are installation-wide. Session snapshots retain
+owned global provider defaults for explicit `[[artwork]]`; generated module presets
+continue resolving the selected user's settings. Explicit artwork bindings use
+their own global provider instead of copying a user's prepared module image, and
+never carry a user's Bilibili credentials. Title/login settings remain shared.
+Legacy user artwork is promoted with duplicate/conflict validation. This changes
+configuration resolution and worker preparation only; no native RVAs, ABI, hook
+guards, graphics ownership or visit-lifetime behavior changed.
+
 User-imported real-time PMX/VMD characters use a separate CPU animation worker
 and graphics-owner D3D9 renderer, feeding the existing character atlas adapter.
 Assets and completed vertices are owned snapshots; no file IO or animation
@@ -255,13 +274,24 @@ The normal visit freeze, owned BGRA publication, shared decoder/texture lifetime
 reset behavior and native exact-build guards are unchanged. No new game RVAs,
 ABI assumptions or native hooks were introduced.
 
-The UI restores a two-page sidebar. A separate account thread handles QR creation,
-two-second polling, expiry, cancellation, profile/folder refresh and local logout.
-Generation numbers reject stale UI responses. Sessions are DPAPI-protected for
-the current Windows user under LOCALAPPDATA, outside the configuration document.
-They cannot be copied to a different machine/account; login belongs on the game
-host. Automatic cookie refresh is not implemented; an expired session requests
-another scan. Prepared previews use the same provider as the DLL.
+The user/card page includes a separate account worker for QR creation, two-second
+polling, expiry, cancellation, profile/folder refresh and local logout. Each login
+belongs to the canonical configuration path and stable user ID. Their SHA-256 key
+names a file under LOCALAPPDATA/iidxbg/bilibili-users and supplies DPAPI entropy;
+the key and cookies are never serialized into TOML. There is no fallback to the
+former shared session. Shared pre-login modules and unknown users are anonymous.
+Provider snapshots, live transports and preview fingerprints retain the selected
+key; downloaded video caches are also separated by key (or anonymous namespace).
+
+Switching users clears visible account data and advances the worker generation.
+Queued requests and QR results retain their original user key. Stale polls and
+post-verification completions cannot update the new user; explicit logout and
+deletion still remove only the captured user's session. Deleting a user queues
+logout after any in-flight account work. All credential IO stays on the worker.
+Sessions use current-Windows-user DPAPI protection, so login belongs on the game
+host. Moving the config requires rebinding. Automatic cookie refresh is not
+implemented; an expired session requests another scan. Prepared previews use
+the same provider as the DLL. No hooks, game RVAs or ABI contracts changed.
 
 Protocol references inspected: PiliPlus `lib/http/video.dart`, `lib/http/fav.dart`,
 `lib/utils/wbi_sign.dart`, and wiliwili's QR-login flow. The Rust adapter is an

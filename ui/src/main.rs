@@ -9,6 +9,7 @@ mod preview;
 mod scanner;
 mod store;
 mod theme;
+mod users;
 mod widgets;
 
 use gpui_kit::assets::AllAssets;

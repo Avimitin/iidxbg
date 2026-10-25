@@ -7,8 +7,10 @@ pub mod mmd;
 pub mod pixels;
 mod presets;
 pub mod profile;
+pub mod session;
 pub mod source;
 pub mod state;
+pub mod users;
 pub mod video;
 
 #[cfg(all(windows, target_arch = "x86_64"))]

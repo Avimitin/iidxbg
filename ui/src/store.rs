@@ -19,24 +19,42 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 pub struct ConfigStore {
     path: PathBuf,
     doc: DocumentMut,
-    config: Config,
+    full: Config,
     saved_at: Option<SystemTime>,
     error: Option<String>,
+    scope: Scope,
+    scoped: Config,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Scope {
+    Legacy,
+    PreLogin,
+    Assets,
+    User(String),
+}
+const USER_KEYS: &[&str] = &["surfaces", "sources", "selection", "mmd", "results_video"];
 
 impl ConfigStore {
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, String> {
-        let path = path.into();
+        let path = path
+            .into()
+            .canonicalize()
+            .map_err(|e| format!("无法打开配置：{e}"))?;
         let text = fs::read_to_string(&path)
             .map_err(|error| format!("无法读取 {}：{error}", path.display()))?;
-        let doc = text
+        let mut doc = text
             .parse::<DocumentMut>()
             .map_err(|error| format!("TOML 语法错误：{error}"))?;
-        let config = Config::parse(&text).map_err(|error| format!("配置无效：{error}"))?;
+        let mut config = Config::parse(&text).map_err(|error| format!("配置无效：{error}"))?;
+        promote_artwork_document(&mut doc);
+        config.config_path = path.clone();
         Ok(Self {
             path,
             doc,
-            config,
+            scoped: config.clone(),
+            full: config,
+            scope: Scope::Legacy,
             saved_at: None,
             error: None,
         })
@@ -47,7 +65,95 @@ impl ConfigStore {
     }
 
     pub fn config(&self) -> &Config {
-        &self.config
+        &self.scoped
+    }
+
+    pub fn document_config(&self) -> &Config {
+        &self.full
+    }
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+    pub fn set_scope(&mut self, scope: Scope) {
+        self.scope = scope;
+        self.refresh_scope();
+    }
+    fn refresh_scope(&mut self) {
+        self.full.config_path = self.path.clone();
+        if let Scope::User(id) = &self.scope
+            && !self.full.users.contains_key(id)
+        {
+            self.scope = Scope::PreLogin;
+        }
+        self.scoped = match &self.scope {
+            Scope::Legacy => self.full.clone(),
+            Scope::PreLogin => self.full.for_user(None),
+            Scope::Assets => self.full.for_assets(),
+            Scope::User(id) => self.full.for_user(Some(id)),
+        };
+    }
+    pub fn accepts_surface(&self, surface: Surface) -> bool {
+        match self.scope {
+            Scope::Legacy => true,
+            Scope::PreLogin | Scope::Assets => iidxbg::users::is_pre_login(surface),
+            Scope::User(_) => !iidxbg::users::is_pre_login(surface),
+        }
+    }
+
+    fn scoped_document(&self) -> DocumentMut {
+        if self.scope == Scope::Legacy {
+            return self.doc.clone();
+        }
+        let mut doc = self.doc.clone();
+        doc.remove("users");
+        doc.remove("pre_login");
+        for key in USER_KEYS {
+            if self.scope != Scope::Assets {
+                doc.remove(key);
+            }
+        }
+        set_bool(&mut doc, &["surfaces", "results"], false);
+        match &self.scope {
+            Scope::User(id) => {
+                if let Some(settings) = self
+                    .doc
+                    .get("users")
+                    .and_then(|u| u.get(id))
+                    .and_then(|u| u.get("settings"))
+                {
+                    for key in USER_KEYS {
+                        if let Some(value) = settings.get(key) {
+                            doc[key] = value.clone();
+                        }
+                    }
+                }
+            }
+            Scope::PreLogin | Scope::Assets => {
+                for surface in [Surface::Title, Surface::Login] {
+                    set_bool(
+                        &mut doc,
+                        &["surfaces", surface.name()],
+                        self.scoped.surface_enabled(surface),
+                    );
+                    let source = if self.doc.contains_key("pre_login") {
+                        self.doc
+                            .get("pre_login")
+                            .and_then(|p| p.get(surface.name()))
+                            .and_then(|p| p.get("source"))
+                    } else {
+                        self.doc.get("sources").and_then(|p| p.get(surface.name()))
+                    }
+                    .cloned()
+                    .unwrap_or(Item::Table(Table::new()));
+                    table_mut(&mut doc, &["sources"]).insert(surface.name(), source);
+                }
+            }
+            Scope::Legacy => {}
+        }
+        if doc.get("surfaces").and_then(|s| s.get("results")).is_none() {
+            set_bool(&mut doc, &["surfaces", "results"], false);
+        }
+        doc
     }
 
     #[cfg(test)]
@@ -62,14 +168,96 @@ impl ConfigStore {
     /// Apply a format-preserving edit and write it if the whole document is
     /// valid. Returns `true` only when the file on disk is up to date.
     pub fn edit(&mut self, edit: impl FnOnce(&mut DocumentMut)) -> bool {
+        if self.scope == Scope::Legacy {
+            edit(&mut self.doc);
+            return self.commit();
+        }
+        let mut draft = self.scoped_document();
+        edit(&mut draft);
+        let scope = self.scope.clone();
+        self.edit_root(|doc| {
+            if draft.get("enabled").and_then(Item::as_bool) == Some(true) {
+                set_bool(doc, &["enabled"], true);
+            }
+            match scope {
+                Scope::User(id) => {
+                    let table = table_mut(doc, &["users", &id, "settings"]);
+                    for key in USER_KEYS {
+                        if let Some(value) = draft.get(key) {
+                            table.insert(key, value.clone());
+                        } else {
+                            table.remove(key);
+                        }
+                    }
+                }
+                Scope::PreLogin | Scope::Assets => {
+                    for surface in [Surface::Title, Surface::Login] {
+                        let name = surface.name();
+                        set_bool(
+                            doc,
+                            &["pre_login", name, "enabled"],
+                            draft["surfaces"][name].as_bool().unwrap_or(false),
+                        );
+                        if let Some(source) = draft.get("sources").and_then(|s| s.get(name)) {
+                            table_mut(doc, &["pre_login", name]).insert("source", source.clone());
+                        }
+                    }
+                }
+                Scope::Legacy => unreachable!(),
+            }
+        })
+    }
+
+    pub fn edit_root(&mut self, edit: impl FnOnce(&mut DocumentMut)) -> bool {
+        let before = self.doc.clone();
         edit(&mut self.doc);
-        self.commit()
+        if self.commit() {
+            true
+        } else {
+            self.doc = before;
+            false
+        }
+    }
+    pub fn create_user(&mut self, name: &str) -> Option<String> {
+        let id = format!(
+            "user-{:x}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()?
+                .as_nanos()
+        );
+        self.edit_root(|doc| {
+            set_string(doc, &["users", &id, "name"], name.trim());
+            for surface in Surface::ALL {
+                set_bool(
+                    doc,
+                    &["users", &id, "settings", "surfaces", surface.name()],
+                    false,
+                );
+            }
+        })
+        .then_some(id)
+    }
+    pub fn bind_card(&mut self, id: &str, card: &str) -> bool {
+        let card = match iidxbg::users::normalize_card(card) {
+            Ok(c) => c,
+            Err(e) => {
+                self.error = Some(e.to_string());
+                return false;
+            }
+        };
+        let Some(user) = self.full.users.get(id) else {
+            return false;
+        };
+        let mut cards = user.cards.clone();
+        cards.push(card);
+        self.edit_root(|doc| set_strings(doc, &["users", id, "cards"], &cards))
     }
 
     pub(crate) fn artwork_document(&self, index: usize) -> DocumentMut {
-        let mut doc = self.doc.clone();
-        let art = &self.config.artwork[index];
-        let source = self.doc["artwork"]
+        let mut doc = self.scoped_document();
+        let art = &self.scoped.artwork[index];
+        let source = doc["artwork"]
             .as_array_of_tables()
             .and_then(|a| a.get(index))
             .and_then(|t| t.get("source"))
@@ -88,7 +276,7 @@ impl ConfigStore {
         edit(&mut draft);
         let source = draft["sources"]["transition"].clone();
         let enabled = draft["surfaces"]["transition"].clone();
-        self.edit(|doc| {
+        self.edit_root(|doc| {
             if let Some(table) = doc["artwork"]
                 .as_array_of_tables_mut()
                 .and_then(|a| a.get_mut(index))
@@ -100,15 +288,15 @@ impl ConfigStore {
     }
     pub(crate) fn add_artwork(&mut self, archive: &str, texture: &str) -> Option<usize> {
         if let Some(index) = self
-            .config
+            .scoped
             .artwork
             .iter()
             .position(|a| a.archive == archive && a.texture == texture)
         {
             return Some(index);
         }
-        let index = self.config.artwork.len();
-        self.edit(|doc| {
+        let index = self.scoped.artwork.len();
+        self.edit_root(|doc| {
             if !doc.contains_key("artwork") {
                 doc["artwork"] = Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
             }
@@ -132,7 +320,8 @@ impl ConfigStore {
         };
         match write_atomic(&self.path, &text) {
             Ok(()) => {
-                self.config = parsed;
+                self.full = parsed;
+                self.refresh_scope();
                 self.saved_at = Some(SystemTime::now());
                 self.error = None;
                 true
@@ -146,7 +335,6 @@ impl ConfigStore {
 
     /// Re-read the file, discarding an invalid draft. Keeps the current state
     /// and reports an error when the file on disk is not valid.
-    #[cfg(test)]
     pub fn reload(&mut self) -> bool {
         let text = match fs::read_to_string(&self.path) {
             Ok(text) => text,
@@ -155,7 +343,7 @@ impl ConfigStore {
                 return false;
             }
         };
-        let doc = match text.parse::<DocumentMut>() {
+        let mut doc = match text.parse::<DocumentMut>() {
             Ok(doc) => doc,
             Err(error) => {
                 self.error = Some(format!("TOML 语法错误：{error}"));
@@ -169,10 +357,65 @@ impl ConfigStore {
                 return false;
             }
         };
+        promote_artwork_document(&mut doc);
         self.doc = doc;
-        self.config = config;
+        self.full = config;
+        self.refresh_scope();
         self.error = None;
         true
+    }
+}
+
+/// Mirror Config's promotion while retaining the original TOML tables/comments.
+/// The normalized document is written only when the user makes an edit.
+fn promote_artwork_document(doc: &mut DocumentMut) {
+    fn tables(item: Item) -> toml_edit::ArrayOfTables {
+        if item.as_array().is_some_and(|array| array.is_empty()) {
+            return toml_edit::ArrayOfTables::new();
+        }
+        item.into_array_of_tables().expect("validated artwork")
+    }
+    // Accept both [[artwork]] and an inline array of tables.
+    if let Some(artwork) = doc.remove("artwork") {
+        doc["artwork"] = Item::ArrayOfTables(tables(artwork));
+    }
+    let mut ids: Vec<_> = doc
+        .get("users")
+        .and_then(Item::as_table_like)
+        .map(|users| users.iter().map(|(id, _)| id.to_owned()).collect())
+        .unwrap_or_default();
+    ids.sort();
+    for id in ids {
+        let legacy = doc
+            .get_mut("users")
+            .and_then(|users| users.get_mut(&id))
+            .and_then(|user| user.get_mut("settings"))
+            .and_then(Item::as_table_like_mut)
+            .and_then(|settings| settings.remove("artwork"));
+        let Some(legacy) = legacy else { continue };
+        let entries = tables(legacy);
+        for entry in entries {
+            let exists = doc
+                .get("artwork")
+                .and_then(Item::as_array_of_tables)
+                .is_some_and(|entries| {
+                    entries.iter().any(|existing| {
+                        ["archive", "texture"].iter().all(|key| {
+                            existing.get(key).and_then(Item::as_str)
+                                == entry.get(key).and_then(Item::as_str)
+                        })
+                    })
+                });
+            if !exists {
+                if !doc.contains_key("artwork") {
+                    doc["artwork"] = Item::ArrayOfTables(Default::default());
+                }
+                doc["artwork"]
+                    .as_array_of_tables_mut()
+                    .expect("artwork tables")
+                    .push(entry);
+            }
+        }
     }
 }
 
@@ -378,6 +621,187 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_and_runtime_keep_the_same_user_account_across_edits_and_reload() {
+        let (_dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        let a = store.create_user("Alice").unwrap();
+        let b = store.create_user("Bob").unwrap();
+        store.set_scope(Scope::User(a.clone()));
+        let key = store.config().bilibili.account.clone();
+        assert!(key.is_some());
+        assert_eq!(
+            Config::load(&path)
+                .unwrap()
+                .for_user(Some(&a))
+                .bilibili
+                .account,
+            key
+        );
+        assert!(store.edit(|doc| set_surface_enabled(doc, Surface::Results, true)));
+        assert!(store.reload());
+        assert_eq!(
+            crate::preview::specs(store.config())[Surface::Results.index()]
+                .fingerprint
+                .bilibili
+                .account,
+            key
+        );
+        store.set_scope(Scope::User(b));
+        assert_ne!(store.config().bilibili.account, key);
+        store.set_scope(Scope::PreLogin);
+        assert!(store.config().bilibili.account.is_none());
+        store.set_scope(Scope::User(a));
+        assert_eq!(store.config().bilibili.account, key);
+        assert!(!fs::read_to_string(path).unwrap().contains("config_path"));
+    }
+
+    #[test]
+    fn user_settings_and_cards_are_isolated_but_artwork_is_shared() {
+        let (_dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        let legacy = store.document_config().clone();
+        let a = store.create_user("Alice").unwrap();
+        let b = store.create_user("Bob").unwrap();
+        assert!(store.bind_card(&a, "e004010000000001"));
+        assert!(store.bind_card(&a, "E004010000000002"));
+        let before_duplicate = fs::read_to_string(&path).unwrap();
+        assert!(!store.bind_card(&b, "E004010000000001"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before_duplicate);
+        store.set_scope(Scope::User(a.clone()));
+        assert!(store.edit(|doc| {
+            set_surface_enabled(doc, Surface::SongSelect, true);
+            set_string(
+                doc,
+                &["sources", "song_select", "local_directory"],
+                "alice-art",
+            );
+            set_bool(doc, &["selection", "frame_chara"], false);
+        }));
+        let index = store.add_artwork("example.ifs", "tile").unwrap();
+        assert!(store.edit_artwork(index, |doc| set_surface_enabled(
+            doc,
+            Surface::Transition,
+            true
+        )));
+        assert!(store.config().artwork[0].enabled);
+        store.set_scope(Scope::User(b.clone()));
+        assert!(!store.config().surface_enabled(Surface::SongSelect));
+        assert!(!store.config().surface_enabled(Surface::Results));
+        assert!(!store.config().hide_frame_chara());
+        assert!(store.config().artwork[0].enabled);
+        assert!(
+            store
+                .document_config()
+                .users
+                .values()
+                .all(|u| u.settings.artwork.is_empty())
+        );
+        assert_eq!(store.document_config().sources, legacy.sources);
+        assert_eq!(store.document_config().surfaces, legacy.surfaces);
+        assert_eq!(store.document_config().users[&a].cards.len(), 2);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("#"));
+        let fresh = ConfigStore::load(path).unwrap();
+        assert_eq!(
+            fresh.document_config().users[&a]
+                .settings
+                .sources
+                .song_select
+                .local_directory
+                .as_deref(),
+            Some(Path::new("alice-art"))
+        );
+    }
+
+    #[test]
+    fn pre_login_edits_do_not_touch_users_and_new_users_start_disabled() {
+        let (_dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        assert!(store.edit(|doc| {
+            set_surface_enabled(doc, Surface::SongSelect, true);
+            set_bool(doc, &["selection", "frame_chara"], false);
+        }));
+        let empty = store.create_user("Empty").unwrap();
+        let second = store.create_user("Second").unwrap();
+        assert!(
+            !store.document_config().users[&empty]
+                .settings
+                .surfaces
+                .song_select
+        );
+        assert!(
+            !store.document_config().users[&second]
+                .settings
+                .surfaces
+                .song_select
+        );
+        let before = store.document_config().users.clone();
+        store.set_scope(Scope::PreLogin);
+        assert!(store.edit(|doc| {
+            set_surface_enabled(doc, Surface::Title, true);
+            set_string(doc, &["sources", "title", "local_directory"], "cabinet");
+        }));
+        assert_eq!(store.document_config().users, before);
+        assert!(
+            store
+                .document_config()
+                .pre_login
+                .as_ref()
+                .unwrap()
+                .title
+                .enabled
+        );
+        assert!(store.config().surface_enabled(Surface::Title));
+        assert!(!store.config().hide_frame_chara());
+        assert!(!store.config().surface_enabled(Surface::SongSelect));
+        assert!(store.reload());
+        assert!(store.config().surface_enabled(Surface::Title));
+    }
+
+    #[test]
+    fn new_users_do_not_inherit_legacy_character_or_model() {
+        let (_dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        assert!(store.edit(|doc| {
+            set_bool(doc, &["enabled"], false);
+            set_bool(doc, &["selection", "frame_chara"], false);
+            set_bool(doc, &["mmd", "enabled"], true);
+        }));
+        let id = store.create_user("New user").unwrap();
+        store.set_scope(Scope::User(id));
+        assert!(store.edit(|doc| set_surface_enabled(doc, Surface::Lift, true)));
+        assert!(store.config().surface_enabled(Surface::Lift));
+        assert!(!store.config().surface_enabled(Surface::Results));
+        assert!(!store.config().hide_frame_chara());
+        assert!(!store.config().uses_mmd());
+    }
+
+    #[test]
+    fn partial_user_surface_edit_does_not_enable_results_and_invalid_edit_rolls_back() {
+        let (_dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        assert!(store.edit_root(|doc| {
+            set_string(doc, &["users", "a", "name"], "A");
+            set_bool(
+                doc,
+                &["users", "a", "settings", "surfaces", "song_select"],
+                true,
+            );
+        }));
+        store.set_scope(Scope::User("a".into()));
+        assert!(store.edit(|doc| set_string(
+            doc,
+            &["sources", "song_select", "local_directory"],
+            "a"
+        )));
+        assert!(!store.config().surface_enabled(Surface::Results));
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(!store.edit(|doc| set_string(doc, &["sources", "song_select", "bind"], "title")));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        assert!(store.edit(|doc| set_surface_enabled(doc, Surface::Lift, true)));
+    }
 
     #[test]
     fn qpro_switch_preserves_legacy_stock_image_and_explicit_main_source() {
@@ -706,6 +1130,70 @@ mod tests {
 #[cfg(test)]
 mod artwork_tests {
     use super::*;
+    #[test]
+    fn assets_save_globally_without_users_and_survive_scope_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, include_str!("../../tests/fixtures/default.toml")).unwrap();
+        let mut store = ConfigStore::load(&path).unwrap();
+        store.set_scope(Scope::Assets);
+        assert!(store.config().bilibili.account.is_none());
+        assert!(store.edit(|doc| {
+            set_surface_enabled(doc, Surface::Title, true);
+            set_string(doc, &["sources", "title", "media_path"], "title.png");
+        }));
+        let index = store.add_artwork("test.ifs", "tile").unwrap();
+        assert!(store.edit_artwork(index, |doc| {
+            set_surface_enabled(doc, Surface::Transition, true);
+            set_string(doc, &["sources", "transition", "media_path"], "shared.png");
+        }));
+        assert!(store.reload());
+        assert_eq!(store.scope(), &Scope::Assets);
+        let art = store.config().artwork.clone();
+        for name in ["Alice", "Bob"] {
+            let id = store.create_user(name).unwrap();
+            store.set_scope(Scope::User(id));
+            assert_eq!(store.config().artwork, art);
+            assert!(
+                store
+                    .document_config()
+                    .users
+                    .values()
+                    .all(|u| u.settings.artwork.is_empty())
+            );
+        }
+        let loaded = Config::load(&path).unwrap();
+        assert_eq!(loaded.artwork, loaded.for_user(None).artwork);
+        assert!(loaded.pre_login.unwrap().title.enabled);
+    }
+
+    #[test]
+    fn legacy_artwork_document_migrates_only_on_save_and_preserves_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let text = format!(
+            "artwork = []\n{}\n[users.a]\nname='A' # keep name\n[[users.a.settings.artwork]]\narchive='test.ifs' # keep archive\ntexture='tile'\n[users.a.settings.artwork.source]\nsource='file'\nmedia_path='shared.png'\n[users.b]\nname='B'\n[users.b.settings]\nartwork=[{{archive='test.ifs',texture='tile',source={{source='file',media_path='shared.png'}}}}]\n",
+            include_str!("../../tests/fixtures/default.toml")
+        );
+        fs::write(&path, &text).unwrap();
+        let mut store = ConfigStore::load(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        store.set_scope(Scope::Assets);
+        assert_eq!(store.config().artwork.len(), 1);
+        assert!(store.edit_artwork(0, |doc| set_surface_enabled(
+            doc,
+            Surface::Transition,
+            false
+        )));
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("# keep name"));
+        assert!(saved.contains("# keep archive"));
+        assert!(!saved.contains("settings.artwork"));
+        assert!(store.reload());
+        assert!(!store.config().artwork[0].enabled);
+        assert_eq!(store.config().artwork.len(), 1);
+    }
+
     #[test]
     fn named_editor_does_not_change_transition_or_discard_comments() {
         let dir = tempfile::tempdir().unwrap();

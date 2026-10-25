@@ -5,18 +5,22 @@ use gpui::{
     px,
 };
 use gpui_kit::{
-    component::{Sizable, button::Button, h_flex, scroll::ScrollableElement, v_flex},
+    component::{button::ButtonVariants, h_flex, v_flex},
     *,
 };
 use iidxbg::{
     bilibili::{
         Account, Api, Folder,
-        auth::{self, Poll},
+        auth::{self, AccountKey, Poll},
     },
     pixels::Prepared,
 };
 use std::{
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -32,58 +36,92 @@ enum Event {
     Qr(Prepared),
     Account(Account, Vec<Folder>),
     Clear(String),
+    SignedOut,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Ticket {
+    generation: u64,
+    key: Option<AccountKey>,
+}
+impl Ticket {
+    fn current(&self, latest: &AtomicU64) -> bool {
+        latest.load(Ordering::Acquire) == self.generation
+    }
 }
 pub(crate) struct State {
-    tx: mpsc::Sender<(u64, Command)>,
-    generation: u64,
+    tx: mpsc::Sender<(Ticket, Command)>,
+    ticket: Ticket,
+    latest: Arc<AtomicU64>,
     pub status: SharedString,
     pub qr: Option<Arc<RenderImage>>,
     pub account: Option<Account>,
     pub folders: Vec<Folder>,
 }
+impl Drop for State {
+    fn drop(&mut self) {
+        self.latest.fetch_add(1, Ordering::AcqRel);
+    }
+}
 impl State {
-    pub fn new(cx: &mut Context<AppView>) -> Self {
-        let (tx, rx) = mpsc::channel();
+    pub fn new(key: Option<AccountKey>, cx: &mut Context<AppView>) -> Self {
+        let (tx, rx) = mpsc::channel::<(Ticket, Command)>();
         let (events, outcomes) = async_channel::unbounded();
+        let latest = Arc::new(AtomicU64::new(0));
+        let worker_latest = latest.clone();
         std::thread::Builder::new()
             .name("iidxbg-bilibili-login".into())
             .spawn(move || {
-                let mut pending: Option<(u64, Api, auth::Qr, Instant)> = None;
+                let mut pending: Option<(Ticket, Api, auth::Qr, Instant)> = None;
                 loop {
                     let result = rx.recv_timeout(Duration::from_secs(2));
-                    let (generation, event) = match result {
-                        Ok((generation, command)) => {
+                    let (ticket, event) = match result {
+                        Ok((ticket, command)) => {
                             pending = None;
+                            // Explicit logout/deletion must finish for its captured user,
+                            // even if selection has moved on while network IO was pending.
+                            if !ticket.current(&worker_latest)
+                                && !matches!(command, Command::Logout)
+                            {
+                                continue;
+                            }
                             let result = (|| -> iidxbg::Result<Event> {
+                                let Some(key) = ticket.key.as_ref() else {
+                                    return Ok(Event::Clear("请选择用户".into()));
+                                };
                                 match command {
                                     Command::Login => {
                                         let api = Api::new(auth::Session::default())?;
                                         let qr = api.qr()?;
                                         let image = qr_image(&qr.url)?;
-                                        pending = Some((generation, api, qr, Instant::now()));
+                                        pending = Some((ticket.clone(), api, qr, Instant::now()));
                                         Ok(Event::Qr(image))
                                     }
                                     Command::Refresh => {
-                                        let api = Api::saved()?;
+                                        let api = Api::saved(Some(key))?;
                                         let account = api.account()?;
                                         let folders = api.folders()?;
                                         Ok(Event::Account(account, folders))
                                     }
                                     Command::Logout => {
-                                        auth::logout()?;
-                                        Ok(Event::Clear("已退出本机登录".into()))
+                                        auth::logout(key)?;
+                                        Ok(Event::SignedOut)
                                     }
                                     Command::Cancel => Ok(Event::Message("已取消扫码".into())),
                                 }
                             })();
-                            (generation, result)
+                            (ticket, result)
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
-                            let Some((generation, api, qr, started)) = &pending else {
+                            let Some((ticket, api, qr, started)) = &pending else {
                                 continue;
                             };
-                            let generation = *generation;
+                            let ticket = ticket.clone();
+                            if !ticket.current(&worker_latest) {
+                                pending = None;
+                                continue;
+                            }
                             let result = if started.elapsed() > Duration::from_secs(180) {
                                 Ok(Poll::Expired)
                             } else {
@@ -102,11 +140,27 @@ impl State {
                                 }
                                 Ok(Poll::Ready(session)) => {
                                     pending = None;
-                                    auth::save(session).map(|account| {
-                                        let folders = Api::saved()
-                                            .and_then(|a| a.folders())
-                                            .unwrap_or_default();
-                                        Event::Account(account, folders)
+                                    if !ticket.current(&worker_latest) {
+                                        continue;
+                                    }
+                                    let verified = Api::new(session.clone()).and_then(|api| {
+                                        let account = api.account()?;
+                                        Ok((api, account))
+                                    });
+                                    // Verification can block. Check again immediately before
+                                    // saving; the key always belongs to the QR's original user.
+                                    if !ticket.current(&worker_latest) {
+                                        continue;
+                                    }
+                                    verified.and_then(|(api, account)| {
+                                        auth::save(
+                                            ticket.key.as_ref().expect("login user"),
+                                            &session,
+                                        )?;
+                                        Ok(Event::Account(
+                                            account,
+                                            api.folders().unwrap_or_default(),
+                                        ))
                                     })
                                 }
                                 Err(error) => {
@@ -114,21 +168,21 @@ impl State {
                                     Err(error)
                                 }
                             };
-                            (generation, event)
+                            (ticket, event)
                         }
                     };
                     let event = event.unwrap_or_else(|error| Event::Clear(error.to_string()));
-                    if events.send_blocking((generation, event)).is_err() {
+                    if events.send_blocking((ticket, event)).is_err() {
                         break;
                     }
                 }
             })
             .expect("start account worker");
         cx.spawn(async move |view, cx| {
-            while let Ok((generation, event)) = outcomes.recv().await {
+            while let Ok((ticket, event)) = outcomes.recv().await {
                 if view
                     .update(cx, |view, cx| {
-                        if view.bili.generation != generation {
+                        if view.bili.ticket != ticket {
                             return;
                         }
                         match event {
@@ -138,6 +192,11 @@ impl State {
                                 view.bili.qr = None;
                                 view.bili.account = None;
                                 view.bili.folders.clear();
+                            }
+                            Event::SignedOut => {
+                                view.bili.status = "未绑定账号".into();
+                                view.bili.clear_account();
+                                view.refresh_bilibili_previews(cx);
                             }
                             Event::Qr(pixels) => {
                                 view.bili.qr = Some(preview::render_image(pixels));
@@ -162,24 +221,48 @@ impl State {
             }
         })
         .detach();
-        let state = Self {
+        let mut state = Self {
             tx,
-            generation: 0,
+            ticket: Ticket { generation: 0, key },
+            latest,
             status: "正在检查登录状态…".into(),
             qr: None,
             account: None,
             folders: Vec::new(),
         };
-        let _ = state.tx.send((0, Command::Refresh));
+        state.command(Command::Refresh);
         state
     }
-    pub fn command(&mut self, command: Command) {
-        self.generation = self.generation.wrapping_add(1);
+    fn clear_account(&mut self) {
         self.qr = None;
-        self.status = "正在处理…".into();
-        let _ = self.tx.send((self.generation, command));
+        self.account = None;
+        self.folders.clear();
+    }
+    pub fn select(&mut self, key: Option<AccountKey>) {
+        if self.ticket.key == key {
+            return;
+        }
+        self.ticket.key = key;
+        self.clear_account();
+        self.command(Command::Refresh);
+    }
+    pub fn command(&mut self, command: Command) {
+        self.ticket.generation = self.ticket.generation.wrapping_add(1);
+        self.latest.store(self.ticket.generation, Ordering::Release);
+        self.qr = None;
+        if matches!(command, Command::Logout) {
+            self.clear_account();
+        }
+        self.status = if self.ticket.key.is_some() {
+            "正在处理…"
+        } else {
+            "请选择用户"
+        }
+        .into();
+        let _ = self.tx.send((self.ticket.clone(), command));
     }
 }
+
 fn qr_image(url: &str) -> iidxbg::Result<Prepared> {
     let code =
         qrcode::QrCode::new(url).map_err(|_| iidxbg::Error::Bilibili("无法生成二维码".into()))?;
@@ -208,23 +291,42 @@ fn qr_image(url: &str) -> iidxbg::Result<Prepared> {
 }
 impl AppView {
     pub(crate) fn render_bilibili(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut body=v_flex().id("bilibili-account-page").size_full().overflow_y_scrollbar().p_8().gap_6()
-            .child(div().text_2xl().child("Bilibili"))
-            .child(div().text_base().text_color(theme::muted_ink()).child("扫码登录后，可在每个组件中选择推荐、合集或收藏夹。请在运行游戏的机器上登录；登录信息仅对本机当前 Windows 用户有效。"))
+        let mut body = v_flex()
+            .id("bilibili-account-section")
+            .w_full()
+            .mt_4()
+            .pt_5()
+            .border_t_1()
+            .border_color(theme::line())
+            .gap_4()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().text_lg().child("Bilibili"))
+                    .child(widgets::help(
+                        "bilibili-account-help",
+                        "扫码绑定到当前用户；切换用户会使用对应账号。",
+                    )),
+            )
             .child(div().text_base().child(self.bili.status.clone()));
         let mut buttons = h_flex().gap_3().flex_wrap();
         for (id, label, command) in [
             ("login", "扫码登录", Command::Login),
             ("refresh", "刷新账号 / 收藏夹", Command::Refresh),
             ("cancel", "取消扫码", Command::Cancel),
-            ("logout", "退出本机登录", Command::Logout),
+            ("logout", "解除绑定", Command::Logout),
         ] {
-            buttons = buttons.child(Button::new(id).large().outline().label(label).on_click(
-                cx.listener(move |view, _, _, cx| {
-                    view.bili.command(command);
-                    cx.notify();
-                }),
-            ));
+            buttons = buttons.child(
+                widgets::button(id)
+                    .ghost()
+                    .border_1()
+                    .border_color(theme::line())
+                    .label(label)
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.bili.command(command);
+                        cx.notify();
+                    })),
+            );
         }
         body = body.child(buttons);
         if let Some(qr) = &self.bili.qr {
@@ -235,14 +337,85 @@ impl AppView {
                     .object_fit(ObjectFit::Contain),
             );
         }
-        body = body.child(div().text_base().child("我的收藏夹"));
+        if !self.bili.folders.is_empty() {
+            body = body.child(
+                h_flex()
+                    .gap_2()
+                    .child(div().text_base().child("我的收藏夹"))
+                    .child(widgets::help(
+                        "bilibili-folders-help",
+                        "在 Bilibili App 中管理收藏夹，在组件设置中选择视频来源。",
+                    )),
+            );
+        }
         for folder in &self.bili.folders {
             body = body.child(widgets::muted_path(format!(
                 "{} · ID {}",
                 folder.title, folder.id
             )));
         }
-        body=body.child(div().text_sm().text_color(theme::muted_ink()).child("在手机 App 中维护收藏夹即可更新视频来源。组件设置中可直接选择这里的收藏夹，也可粘贴其他可访问的收藏夹链接。视频静音循环播放，不提交观看进度。"));
         body.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, State, Ticket};
+    use std::sync::{Arc, atomic::AtomicU64, mpsc};
+
+    #[test]
+    fn switching_discards_account_data_and_late_qr_but_keeps_logout_target() {
+        let mut config =
+            iidxbg::config::Config::parse(include_str!("../../tests/fixtures/default.toml"))
+                .unwrap();
+        config.config_path = "cabinet.toml".into();
+        for id in ["alice", "bob"] {
+            config.users.insert(
+                id.into(),
+                iidxbg::users::User {
+                    name: id.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        let alice = config.for_user(Some("alice")).bilibili.account;
+        let bob = config.for_user(Some("bob")).bilibili.account;
+        let (tx, rx) = mpsc::channel();
+        let mut state = State {
+            tx,
+            ticket: Ticket {
+                generation: 0,
+                key: alice.clone(),
+            },
+            latest: Arc::new(AtomicU64::new(0)),
+            status: "".into(),
+            qr: None,
+            account: Some(iidxbg::bilibili::Account {
+                mid: 1,
+                name: "Alice".into(),
+            }),
+            folders: vec![iidxbg::bilibili::Folder {
+                id: 12,
+                title: "Alice's folder".into(),
+            }],
+        };
+        state.command(Command::Login);
+        let (qr, _) = rx.recv().unwrap();
+        state.command(Command::Logout);
+        state.select(bob.clone());
+        let (logout, command) = rx.recv().unwrap();
+        assert!(matches!(command, Command::Logout));
+        assert_eq!(logout.key, alice);
+        let (refresh, command) = rx.recv().unwrap();
+        assert!(matches!(command, Command::Refresh));
+        assert_eq!(refresh.key, bob);
+        assert!(!qr.current(&state.latest));
+        assert!(refresh.current(&state.latest));
+        assert!(state.account.is_none());
+        assert!(state.folders.is_empty());
+        assert!(state.qr.is_none());
+        state.select(None);
+        assert!(!refresh.current(&state.latest));
+        assert!(state.ticket.key.is_none());
     }
 }

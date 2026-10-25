@@ -6,7 +6,6 @@ use gpui::{
 };
 use gpui_kit::{
     component::{
-        button::Button,
         h_flex,
         input::{Input, InputEvent, InputState},
         scroll::ScrollableElement,
@@ -99,6 +98,36 @@ impl Drop for Catalog {
     }
 }
 impl AppView {
+    pub(crate) fn render_assets(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let width = (window.viewport_size().width.as_f32() - theme::SIDEBAR_WIDTH).max(240.);
+        let panel_width = width / 2.;
+        let height = ((panel_width - 24.) * 9. / 16. + 24.).min(220.);
+        let mut shared = div().relative().w_full().h(px(height)).flex_shrink_0();
+        for (index, surface) in [Surface::Title, Surface::Login].into_iter().enumerate() {
+            shared = shared.child(self.render_surface_module(
+                surface,
+                crate::gallery::Region {
+                    x: index as f32 * panel_width,
+                    y: 0.,
+                    width: panel_width,
+                    height,
+                },
+                window,
+                cx,
+            ));
+        }
+        let content = self.render_artwork(window, cx);
+        v_flex()
+            .size_full()
+            .child(shared)
+            .child(div().flex_1().min_h_0().w_full().child(content))
+            .into_any_element()
+    }
+
     fn scan_artwork(&mut self, cx: &mut Context<Self>) {
         if let Some(cancel) = &self.catalog.scan_cancel {
             cancel.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -181,15 +210,18 @@ impl AppView {
     }
     pub(crate) fn editor_config(&self) -> Config {
         if let Some(index) = self.artwork_editor {
-            Config::parse(&self.store.artwork_document(index).to_string())
-                .unwrap_or_else(|_| self.store.config().clone())
+            let base = self.store.config();
+            let mut config = Config::parse(&self.store.artwork_document(index).to_string())
+                .unwrap_or_else(|_| base.clone());
+            config.config_path = base.config_path.clone();
+            config
         } else {
             self.store.config().clone()
         }
     }
     fn open_artwork(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.store.add_artwork(&entry.archive, &entry.texture) {
-            self.store.edit(|doc| {
+            self.store.edit_root(|doc| {
                 if let Some(table) = doc["artwork"]
                     .as_array_of_tables_mut()
                     .and_then(|a| a.get_mut(index))
@@ -227,9 +259,10 @@ impl AppView {
         self.catalog.preview = None;
         self.catalog.preview_error = None;
         let path = self.store.path().to_path_buf();
+        let config = self.store.config().clone();
         let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
-            let _ = tx.send_blocking(crate::preview::prepare_artwork(&path, index));
+            let _ = tx.send_blocking(crate::preview::prepare_artwork(&path, index, config));
         });
         cx.spawn(async move |view, cx| {
             let Ok(result) = rx.recv().await else {
@@ -375,10 +408,11 @@ impl AppView {
         };
         let toolbar = h_flex()
             .p_4()
-            .gap_4()
-            .child(Input::new(&self.catalog.search).w(px(420.)))
+            .gap_3()
+            .flex_wrap()
+            .child(Input::new(&self.catalog.search).w(px(260.)))
             .child(
-                Button::new("scan-artwork")
+                widgets::button("scan-artwork")
                     .label(if self.catalog.scan_cancel.is_some() {
                         "取消扫描"
                     } else {
@@ -387,12 +421,13 @@ impl AppView {
                     .on_click(cx.listener(|view, _, _, cx| view.scan_artwork(cx))),
             )
             .child(
-                Button::new("import-artwork")
+                widgets::button("import-artwork")
                     .label("导入素材目录")
+                    .tooltip("导入已有的素材目录 JSON")
                     .on_click(cx.listener(|view, _, _, cx| view.import_catalog(cx))),
             )
             .child(
-                Button::new("art-prev")
+                widgets::button("art-prev")
                     .label("上一页")
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.catalog.page = view.catalog.page.saturating_sub(1);
@@ -400,7 +435,7 @@ impl AppView {
                     })),
             )
             .child(
-                Button::new("art-next")
+                widgets::button("art-next")
                     .label("下一页")
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.catalog.page += 1;
@@ -503,11 +538,16 @@ impl AppView {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .child(format!("素材缓存目录：{}", path.display())),
+                                .text_sm()
+                                .text_color(theme::muted_ink())
+                                .text_ellipsis()
+                                .overflow_hidden()
+                                .child(format!("缓存：{}", path.display())),
                         )
                         .child(
-                            Button::new("open-artwork-cache")
+                            widgets::button("open-artwork-cache")
                                 .label("打开缓存目录")
+                                .tooltip("可在此清理预览缓存，之后重新扫描生成")
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     match std::fs::create_dir_all(&path) {
                                         Ok(()) => cx.open_with_system(&path),
@@ -520,19 +560,50 @@ impl AppView {
                                 })),
                         ),
                 )
-                .child(div().text_color(theme::muted_ink()).child(
-                    "可在文件夹中清理素材缓存；清理后点击「扫描游戏素材」重新生成目录和预览。",
-                ))
                 .into_any_element(),
             Err(error) => {
                 widgets::error_banner(format!("素材缓存目录不可用：{error}")).into_any_element()
             }
         };
-        v_flex().size_full().child(toolbar)
+        v_flex()
+            .size_full()
+            .child(toolbar)
             .child(cache)
-            .when(!self.catalog.scan_status.is_empty(), |v| v.child(h_flex().px_4().py_2().gap_4().child(self.catalog.scan_status.clone())
-                .when_some(self.catalog.scan_report.clone(), |v, path| v.child(Button::new("scan-report").label("查看报告").on_click(move |_, _, cx| cx.reveal_path(&path))))))
-            .child(div().px_4().h(px(32.)).overflow_hidden().child(self.catalog.detail.clone())).when_some(self.catalog.error.clone(),|view,e|view.child(widgets::error_banner(e))).when(total==0,|view|view.child(div().p_6().child("点击「扫描游戏素材」读取本机游戏，也可导入已有目录。扫描仅在点击后进行，不修改游戏文件。每项支持独立图片、视频、文件夹、API 或组件绑定。")))
-            .child(div().id("artwork-scroll").flex_1().min_h_0().overflow_y_scrollbar().child(div().relative().w_full().h(px(height)).children(modules))).into_any_element()
+            .when(!self.catalog.scan_status.is_empty(), |v| {
+                v.child(
+                    h_flex()
+                        .px_4()
+                        .py_2()
+                        .gap_4()
+                        .child(self.catalog.scan_status.clone())
+                        .when_some(self.catalog.scan_report.clone(), |v, path| {
+                            v.child(
+                                widgets::button("scan-report")
+                                    .label("查看报告")
+                                    .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                            )
+                        }),
+                )
+            })
+            .child(
+                div()
+                    .px_4()
+                    .h(px(32.))
+                    .overflow_hidden()
+                    .child(self.catalog.detail.clone()),
+            )
+            .when_some(self.catalog.error.clone(), |view, e| {
+                view.child(widgets::error_banner(e))
+            })
+            .when(total == 0, |view| view.child(div().p_6().child("暂无素材")))
+            .child(
+                div()
+                    .id("artwork-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(div().relative().w_full().h(px(height)).children(modules)),
+            )
+            .into_any_element()
     }
 }

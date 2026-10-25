@@ -62,7 +62,7 @@ fn run() -> iidxbg::Result<()> {
                     "live-check duration must be 10..300 seconds",
                 ))?;
             std::fs::create_dir_all(out)?;
-            let video = iidxbg::video::load_live(room, 432, 723)?;
+            let video = iidxbg::video::load_live(room, 432, 723, None)?;
             pixels::write_preview(&video.first, &out.join("first.png"))?;
             let mut report = Vec::new();
             for visit in 0..2 {
@@ -102,12 +102,18 @@ fn run() -> iidxbg::Result<()> {
                 ));
             }
         }
-        Some("bilibili-check") if args.len() == 4 => {
+        Some("bilibili-check") if args.len() == 5 => {
             use iidxbg::bilibili::{Api, Mode};
-            let config = Config::load(Path::new(&args[2]))?.for_surface(Surface::Results);
+            let config = Config::load(Path::new(&args[2]))?;
+            if !config.users.contains_key(&args[4]) {
+                return Err(iidxbg::Error::Config("unknown user ID"));
+            }
+            let config = config
+                .for_user(Some(&args[4]))
+                .for_surface(Surface::Results);
             let output = Path::new(&args[3]);
             std::fs::create_dir_all(output)?;
-            let folders = Api::saved()?.folders()?;
+            let folders = Api::saved(config.bilibili.account.as_ref())?.folders()?;
             let mut reports = Vec::new();
             for mode in [
                 Mode::Video,
@@ -185,7 +191,7 @@ fn run() -> iidxbg::Result<()> {
         }
         _ => {
             eprintln!(
-                "iidxbg-tool profiles\niidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>\niidxbg-tool live-check <room-id> <output-directory> <seconds>\niidxbg-tool mmd-inspect <model.pmx> [motion.vmd]\niidxbg-tool mmd-preview <iidxbg.toml> <preview.png> [seconds]"
+                "iidxbg-tool profiles\niidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory> <user-id>\niidxbg-tool live-check <room-id> <output-directory> <seconds>\niidxbg-tool mmd-inspect <model.pmx> [motion.vmd]\niidxbg-tool mmd-preview <iidxbg.toml> <preview.png> [seconds]"
             );
             std::process::exit(2);
         }

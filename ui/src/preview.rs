@@ -112,6 +112,7 @@ pub fn specs(config: &Config) -> [PreviewSpec; Surface::COUNT] {
 
 #[derive(Debug)]
 pub struct PreviewRequest {
+    pub config: Config,
     pub surface: Surface,
     pub target: Surface,
     pub generation: u64,
@@ -136,7 +137,7 @@ pub fn spawn_worker(
                 let outcome = PreviewOutcome {
                     surface: request.surface,
                     generation: request.generation,
-                    result: prepare(&config_path, request.target),
+                    result: prepare(&config_path, request.target, request.config),
                 };
                 if outcomes.send_blocking(outcome).is_err() {
                     break;
@@ -146,8 +147,8 @@ pub fn spawn_worker(
         .expect("start preview worker");
 }
 
-fn prepare(config_path: &Path, target: Surface) -> Result<Prepared, String> {
-    let config = Config::load(config_path).map_err(|error| describe(&error))?;
+fn prepare(config_path: &Path, target: Surface, mut config: Config) -> Result<Prepared, String> {
+    config.resolve_paths(config_path.parent().unwrap_or(Path::new(".")));
     if !config.enabled {
         return Err("全局总开关已关闭".into());
     }
@@ -172,17 +173,18 @@ fn artwork_config(config: &Config, index: usize) -> Result<Config, String> {
         .artwork
         .get(index)
         .ok_or("Artwork entry no longer exists")?;
-    let mut resolved = match art.source.bind {
-        Some(surface) => config.for_surface(surface),
-        None => config.for_artwork(art),
-    };
+    let mut resolved = config.for_artwork(art);
     // A preview is allowed before enabling a replacement in the game.
     resolved.enabled = true;
     Ok(resolved)
 }
 
-pub(crate) fn prepare_artwork(config_path: &Path, index: usize) -> Result<Prepared, String> {
-    let config = Config::load(config_path).map_err(|error| describe(&error))?;
+pub(crate) fn prepare_artwork(
+    config_path: &Path,
+    index: usize,
+    mut config: Config,
+) -> Result<Prepared, String> {
+    config.resolve_paths(config_path.parent().unwrap_or(Path::new(".")));
     let mut provider =
         Provider::new(artwork_config(&config, index)?).map_err(|error| describe(&error))?;
     provider.prepare().map_err(|error| describe(&error))

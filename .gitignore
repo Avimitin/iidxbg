@@ -4,6 +4,7 @@
 !/images/.gitkeep
 /downloads/
 *.log
+*.session.json
 /analysis/
 *token*
 

@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    Icon, Selectable, Sizable, Size, StyledExt,
+    Icon, Selectable, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
 };
@@ -12,24 +12,9 @@ use gpui_kit::*;
 
 use crate::theme;
 
-pub fn status_pill(
-    label: impl Into<SharedString>,
-    foreground: Hsla,
-    background: Hsla,
-) -> AnyElement {
-    h_flex()
-        .px_2()
-        .h(px(26.))
-        .items_center()
-        .justify_center()
-        .bg(background)
-        .border_1()
-        .border_color(foreground.opacity(0.35))
-        .text_color(foreground)
-        .text_size(px(13.))
-        .font_medium()
-        .child(label.into())
-        .into_any_element()
+/// Buttons keep their background clear in normal, hover, pressed and disabled states.
+pub fn button(id: impl Into<gpui::ElementId>) -> Button {
+    Button::new(id).ghost()
 }
 
 pub fn icon_box(icon: IconName, color: Hsla, size: f32) -> AnyElement {
@@ -51,14 +36,13 @@ pub fn segment_button(
     label: impl Into<SharedString>,
     selected: bool,
 ) -> Button {
-    Button::new(id)
+    button(id)
         .large()
         .ghost()
         .label(label)
         .selected(selected)
         .when(selected, |this| {
-            this.bg(theme::page_bg())
-                .border_1()
+            this.border_1()
                 .border_color(theme::accent().opacity(0.8))
                 .text_color(theme::accent())
         })
@@ -75,15 +59,14 @@ pub fn navigation_button(
     } else {
         theme::muted_ink()
     };
-    Button::new(id)
-        .ghost()
-        .with_size(Size::Size(px(56.)))
-        .w(px(56.))
-        .selected(selected)
+    button(id)
+        .text()
+        .with_size(Size::Size(px(40.)))
+        .w(px(40.))
         .text_color(color)
         .icon(
             Icon::new(icon)
-                .with_size(Size::Size(px(24.)))
+                .with_size(Size::Size(px(20.)))
                 .text_color(color),
         )
         .tooltip(label)
@@ -129,10 +112,19 @@ pub fn error_banner(message: impl Into<SharedString>) -> AnyElement {
 }
 
 pub fn close_button(id: impl Into<gpui::ElementId>) -> Button {
-    Button::new(id)
+    button(id)
         .ghost()
         .large()
         .icon(Icon::new(IconName::X).with_size(Size::Small))
+}
+
+pub fn help(id: impl Into<gpui::ElementId>, text: impl Into<SharedString>) -> Button {
+    button(id)
+        .ghost()
+        .small()
+        .icon(IconName::Info)
+        .text_color(theme::muted_ink())
+        .tooltip(text)
 }
 
 pub fn muted_path(text: impl Into<SharedString>) -> AnyElement {

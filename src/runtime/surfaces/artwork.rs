@@ -98,6 +98,32 @@ pub(super) fn invalidate() {
     }
 }
 
+pub(super) fn clear_session() -> bool {
+    if !scenes::clear_session() {
+        return false;
+    }
+    if let Ok(mut state) = ART.try_lock() {
+        // Invalidation may have skipped this lock while a native metadata
+        // callback held it. Do not acknowledge the new context until detached.
+        unsafe { detach_all(&mut state) };
+        state.media = Default::default();
+        state.character = None;
+        state.movie.media = None;
+        state.movie.choice = None;
+        state.cached_custom.clear();
+        state.custom_revision = 0;
+    } else {
+        return false;
+    }
+    if let Ok(mut state) = GENERIC.try_lock() {
+        state.frozen = None;
+    } else {
+        return false;
+    }
+    changed();
+    true
+}
+
 pub(super) fn released(owner: usize) {
     scenes::released(owner);
     if let Ok(mut state) = ART.try_lock() {

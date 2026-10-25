@@ -1,5 +1,17 @@
 # Configuration
 
+Current user configuration is documented in [Users and login sessions](user-sessions.md).
+Create a user from the bottom-left user menu, bind cards in **用户与卡片**,
+and edit that user's modules. The menu searches names and card IDs and switches
+users with one click; the current user is green and listed first. Unbound cards and guests keep stock modules, even when legacy global
+switches are enabled. The top-bar **游戏素材** page keeps title/login preview cards pinned
+above the shared artwork catalog. These direct replacements apply to everyone,
+including guests, and are stored in top-level `[[artwork]]`. New user modules start disabled.
+The runtime now checks
+saved config changes on its background observer; existing result visits remain
+fixed. The reference below describes the legacy provider/module fields, which
+also apply under `users.<id>.settings` as documented in the new schema.
+
 This document describes version 0.2.2, including per-surface sources, download
 retention, blurred contain fill and scene-driven reload. The canonical API section is
 `[moebooru]`; unknown sections/source modes are rejected.

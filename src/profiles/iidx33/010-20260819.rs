@@ -6,6 +6,42 @@ use crate::profile::{Layout, Profile, Table, native_entries, offsets};
 
 pub(super) fn profile() -> Profile {
     let (rvas, guards) = native_entries(&[
+        // Read-only login globals; docs/user-sessions.md.
+        (
+            "session_initialized",
+            0x5c4480,
+            "833d614caf00007411833d5c4caf0000",
+        ),
+        (
+            "session_card_set",
+            0x5ad900,
+            "48895c240848896c2410488974241857",
+        ),
+        (
+            "session_card_format",
+            0x5a0210,
+            "4883ec28e86742020085c0740ab80100",
+        ),
+        (
+            "session_clear",
+            0x5abed0,
+            "4883ec28e8a785010085c075254863c1",
+        ),
+        (
+            "session_ready",
+            0x5ad8a0,
+            "4883ec28e8d76b010085c075484863c9",
+        ),
+        (
+            "session_joined",
+            0x9493e0,
+            "85c9781783f90273124863c1488d0dbd",
+        ),
+        (
+            "session_leave",
+            0x949680,
+            "83f90177114863c1488d0d21e3380ac7",
+        ),
         // Function name, RVA, first 16 bytes of the verified native entry.
         (
             "background_update",
@@ -107,6 +143,13 @@ pub(super) fn profile() -> Profile {
         ),
     ]);
     Profile {
+        session: Some(crate::session::Layout {
+            initialized: 0x10b90e8,
+            joined: 0xacd79b0,
+            identity: 0x6c11808,
+            ready: 0x312771e,
+            stride: 0x3b103a0,
+        }),
         artwork_library: None,
         label: "IIDX 33 / 010-20260819".into(),
         sha256: "c61b6dcb8894062e56d60da8ca90053b27f129e1a8e8da5e54457aa42602397d".into(),

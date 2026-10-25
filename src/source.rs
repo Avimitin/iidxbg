@@ -84,21 +84,27 @@ impl Providers {
 
     pub fn reload(&mut self, path: &Path) -> Result<bool> {
         let config = Config::load(path)?;
-        if config == self.config {
+        self.configure(config, true)
+    }
+
+    pub fn configure(&mut self, config: Config, retain: bool) -> Result<bool> {
+        if config == self.config && retain {
             return Ok(false);
         }
         let mut replacement = Self::new(config)?;
-        for (new, old) in replacement.providers.iter_mut().zip(&mut self.providers) {
-            new.previous = old.previous.take();
-        }
-        for (art, provider, image) in &mut replacement.artwork {
-            if let Some((_, old, previous)) = self
-                .artwork
-                .iter_mut()
-                .find(|(a, _, _)| a.archive == art.archive && a.texture == art.texture)
-            {
-                provider.previous = old.previous.take();
-                *image = previous.take();
+        if retain {
+            for (new, old) in replacement.providers.iter_mut().zip(&mut self.providers) {
+                new.previous = old.previous.take();
+            }
+            for (art, provider, image) in &mut replacement.artwork {
+                if let Some((_, old, previous)) = self
+                    .artwork
+                    .iter_mut()
+                    .find(|(a, _, _)| a.archive == art.archive && a.texture == art.texture)
+                {
+                    provider.previous = old.previous.take();
+                    *image = previous.take();
+                }
             }
         }
         *self = replacement;
@@ -115,9 +121,11 @@ impl Providers {
             .artwork
             .iter_mut()
             .map(|(art, provider, previous)| {
-                if !self.config.enabled || !art.enabled {
+                if !self.config.enabled || !art.enabled || !provider.enabled() {
                     *previous = None;
-                } else if let Some(surface) = art.source.bind {
+                } else if let Some(surface) = art.source.bind
+                    && art.scene_scope.is_some()
+                {
                     *previous = shared
                         [self.config.binding_root(surface).unwrap_or(surface).index()]
                     .clone();
@@ -242,6 +250,7 @@ impl Provider {
                     room,
                     self.config.image.width,
                     self.config.image.height,
+                    self.config.bilibili.account.clone(),
                 )?);
                 self.live_cache = Some((room, asset.clone()));
                 return Ok(asset);
@@ -251,7 +260,7 @@ impl Provider {
         }
         let result = match self.config.source {
             Source::Bilibili => {
-                let path = crate::bilibili::Api::saved()?
+                let path = crate::bilibili::Api::saved(self.config.bilibili.account.as_ref())?
                     .prepare(&self.config.bilibili, self.previous.as_deref())?;
                 self.load_media(&path.path)
             }
@@ -587,6 +596,54 @@ pub fn cleanup_downloads(root: &Path, max_images: usize) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn direct_artwork_ignores_personal_prepared_media_and_works_for_guests() {
+        let root = std::env::temp_dir().join(format!("iidxbg-shared-{:016x}", fastrand::u64(..)));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("shared.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 40, 60, 255]))
+            .save(&path)
+            .unwrap();
+        let mut config = Config::parse(&format!(
+            "{}\n[[artwork]]\narchive='test.ifs'\ntexture='tile'\nenabled=true\nnative_size=[8,8]\n[artwork.source]\nbind='results'\n",
+            include_str!("../tests/fixtures/default.toml")
+        )).unwrap();
+        config.surfaces.results = false;
+        config.sources.results.source = Some(Source::File);
+        config.sources.results.media_path = Some(path.clone());
+        config.users.insert(
+            "alice".into(),
+            crate::users::User {
+                name: "Alice".into(),
+                ..Default::default()
+            },
+        );
+        config
+            .users
+            .get_mut("alice")
+            .unwrap()
+            .settings
+            .sources
+            .results
+            .media_path = Some("private.png".into());
+        let mut personal: [Option<Asset>; Surface::COUNT] = std::array::from_fn(|_| None);
+        personal[Surface::Results.index()] = Some(Asset::Image(Arc::new(Prepared {
+            label: "personal".into(),
+            width: 1,
+            height: 1,
+            bgra: vec![0, 0, 255, 255],
+        })));
+        for user in [Some("alice"), None] {
+            let mut providers = Providers::new(config.for_user(user)).unwrap();
+            let (prepared, errors) = providers.prepare_artwork(&personal);
+            assert!(errors.is_empty(), "{errors:?}");
+            let image = prepared[0].1.as_ref().unwrap();
+            assert_eq!(&image.bgra[..4], &[60, 40, 20, 255]);
+            assert_ne!(image.label, "personal");
+        }
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn fixed_file_is_cached_and_folder_choice_does_not_repeat() {
         let root = std::env::temp_dir().join(format!("iidxbg-media-{:016x}", fastrand::u64(..)));

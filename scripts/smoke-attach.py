@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("plugin", type=Path)
 parser.add_argument("game", type=Path)
 parser.add_argument("--mode", choices=["native", "chain", "bad-tail"], default="native")
+parser.add_argument("--session", action="store_true", help="exercise login observer using synthetic globals; no game code")
 args = parser.parse_args()
 assert ctypes.sizeof(ctypes.c_void_p) == 8
 root = Path(__file__).resolve().parent.parent
@@ -26,7 +27,7 @@ profile = load_profile(digest)
 work = root / "target" / ("smoke-attach-" + uuid.uuid4().hex)
 work.mkdir()
 shutil.copy2(args.plugin, work / "iidxbg.dll")
-shutil.copy2(root / "iidxbg.toml", work / "iidxbg.toml")
+shutil.copy2(root / "tests/fixtures/default.toml", work / "iidxbg.toml")
 
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel.LoadLibraryExW.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p, ctypes.c_uint32]
@@ -129,6 +130,41 @@ for name in ("select_update", "select_cleanup", "select_delete", "movie_draw",
     unchanged = ctypes.string_at(game + rva, 16).hex() == guard["hex"]
     assert unchanged == rejected, f"Unexpected surface hook state: {name}"
 assert shutdown
+if args.session:
+    import json
+    assert not rejected and profile["session"], "requires an accepted login profile"
+    layout = profile["session"]
+    def write(rva, data):
+        ctypes.memmove(game + rva, data, len(data))
+    def expect(joined, cards):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                status = json.loads((work / "iidxbg.session.json").read_text(encoding="utf-8"))
+                if status["login"] == {"joined": joined, "cards": cards}:
+                    assert status["supported"] and status["process_id"]
+                    return
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.05)
+        raise AssertionError(f"login observer did not publish expected state: {joined}")
+    write(layout["initialized"], struct.pack("<II", 1, 1))
+    for side in range(2):
+        write(layout["ready"] + side * layout["stride"], b"\x01")
+        write(layout["identity"] + side * layout["stride"], bytes(28))
+    write(layout["identity"], struct.pack("<Q", 0xE004010000001234))
+    write(layout["joined"], struct.pack("<II", 1, 0))
+    expect([True, False], ["E004010000001234", None])
+    write(layout["identity"], struct.pack("<Q", 0xE004010000005678))
+    expect([True, False], ["E004010000005678", None])
+    write(layout["identity"] + 24, struct.pack("<I", 1))
+    expect([True, False], [None, None])
+    write(layout["identity"] + layout["stride"], struct.pack("<Q", 0x0123456789ABCDEF))
+    write(layout["joined"], struct.pack("<II", 0, 1))
+    expect([False, True], [None, "0123456789ABCDEF"])
+    write(layout["joined"], bytes(8))
+    expect([False, False], [None, None])
+    print("PASS: login/card switch/guest/P2/logout status; synthetic globals, no game execution")
 shutdown()
 time.sleep(0.2)
 print(f"PASS: {profile['label']} / {args.mode}; private mapping, no game execution")

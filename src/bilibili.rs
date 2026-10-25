@@ -47,6 +47,9 @@ pub struct Selection {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    /// Resolved from the configuration's user, never accepted from TOML.
+    #[serde(skip)]
+    pub account: Option<auth::AccountKey>,
     pub selection: Selection,
     pub cache_directory: PathBuf,
     pub quality: u32,
@@ -57,6 +60,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            account: None,
             selection: Selection::default(),
             cache_directory: "iidxbg/bilibili-cache".into(),
             quality: 64,
@@ -111,8 +115,8 @@ impl Api {
             .map_err(network)?;
         Ok(Self { client, session })
     }
-    pub fn saved() -> Result<Self> {
-        Self::new(auth::load()?)
+    pub fn saved(account: Option<&auth::AccountKey>) -> Result<Self> {
+        Self::new(account.map(auth::load).transpose()?.unwrap_or_default())
     }
     fn response(
         &self,
@@ -329,11 +333,16 @@ impl Api {
             .as_str()
             .filter(|s| valid_bvid(s))
             .ok_or_else(|| err("视频缺少 BV 号"))?;
-        fs::create_dir_all(&settings.cache_directory)?;
-        let _cache_lock = cache_lock(&settings.cache_directory)?;
-        let destination = settings
-            .cache_directory
-            .join(format!("bili-{bvid}-{cid}-q{}.mp4", settings.quality));
+        let directory = settings.cache_directory.join(
+            settings
+                .account
+                .as_ref()
+                .map(auth::AccountKey::cache_key)
+                .unwrap_or_else(|| "anonymous".into()),
+        );
+        fs::create_dir_all(&directory)?;
+        let _cache_lock = cache_lock(&directory)?;
+        let destination = directory.join(format!("bili-{bvid}-{cid}-q{}.mp4", settings.quality));
         if let Ok(meta) = fs::symlink_metadata(&destination) {
             if regular(&meta)
                 && meta.len() > 0
@@ -391,12 +400,8 @@ impl Api {
         if response.content_length().is_some_and(|n| n > limit) {
             return Err(Error::Limit);
         }
-        prune(
-            &settings.cache_directory,
-            settings.cache_mb * 1024 * 1024,
-            limit,
-        )?;
-        let mut temp = tempfile::NamedTempFile::new_in(&settings.cache_directory)?;
+        prune(&directory, settings.cache_mb * 1024 * 1024, limit)?;
+        let mut temp = tempfile::NamedTempFile::new_in(&directory)?;
         let bytes = std::io::copy(&mut response.take(limit + 1), &mut temp)?;
         if bytes == 0 || bytes > limit {
             return Err(Error::Limit);

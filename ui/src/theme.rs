@@ -4,12 +4,13 @@ use gpui_kit::component::{Theme, ThemeMode, scroll::ScrollbarMode};
 use gpui_kit::*;
 use iidxbg::config::{Config, Surface};
 
-pub const SIDEBAR_WIDTH: f32 = 88.;
-pub const TITLE_BAR_HEIGHT: f32 = 52.;
+pub const SIDEBAR_WIDTH: f32 = 64.;
+pub const TITLE_BAR_HEIGHT: f32 = 36.;
 
 pub fn install(cx: &mut App) {
+    // Loading a mode replaces its palette; apply our colors afterwards.
+    Theme::change(ThemeMode::Dark, None, cx);
     Theme::update(cx, |theme| {
-        theme.mode = ThemeMode::Dark;
         theme.shadow = false;
         theme.colors.background = rgb(0x000000).into();
         theme.colors.foreground = rgb(0xf0f0f0).into();
@@ -20,18 +21,18 @@ pub fn install(cx: &mut App) {
         theme.colors.primary_hover = rgb(0x78eca4).into();
         theme.colors.primary_active = rgb(0x46c477).into();
         theme.colors.primary_foreground = rgb(0x000000).into();
-        theme.colors.button_primary = rgb(0x000000).into();
-        theme.colors.button_primary_hover = rgb(0x101010).into();
-        theme.colors.button_primary_active = rgb(0x000000).into();
+        theme.colors.button_primary = rgba(0x00000000).into();
+        theme.colors.button_primary_hover = rgba(0x00000000).into();
+        theme.colors.button_primary_active = rgba(0x00000000).into();
         theme.colors.button_primary_foreground = rgb(0x5fe08e).into();
-        theme.colors.button = rgb(0x000000).into();
-        theme.colors.button_hover = rgb(0x000000).into();
-        theme.colors.button_active = rgb(0x000000).into();
-        theme.colors.secondary = rgb(0x000000).into();
-        theme.colors.secondary_hover = rgb(0x000000).into();
-        theme.colors.secondary_active = rgb(0x000000).into();
+        theme.colors.button = rgba(0x00000000).into();
+        theme.colors.button_hover = rgba(0x00000000).into();
+        theme.colors.button_active = rgba(0x00000000).into();
+        theme.colors.secondary = rgba(0x00000000).into();
+        theme.colors.secondary_hover = rgba(0x00000000).into();
+        theme.colors.secondary_active = rgba(0x00000000).into();
         theme.colors.secondary_foreground = rgb(0xc4c4c4).into();
-        theme.colors.accent = rgb(0x000000).into();
+        theme.colors.accent = rgba(0x00000000).into();
         theme.colors.accent_foreground = rgb(0x5fe08e).into();
         theme.colors.ring = rgb(0x5fe08e).into();
         theme.colors.sidebar = rgb(0x000000).into();
@@ -95,20 +96,6 @@ pub fn accent() -> Hsla {
     rgb(0x5fe08e).into()
 }
 
-/// Secondary panels are outlined, never tinted. Keeping these helpers
-/// transparent lets callers opt into a border without painting a green wash.
-pub fn accent_soft() -> Hsla {
-    rgba(0x00000000).into()
-}
-
-pub fn success() -> Hsla {
-    rgb(0x5fe08e).into()
-}
-
-pub fn success_soft() -> Hsla {
-    rgba(0x00000000).into()
-}
-
 pub fn danger() -> Hsla {
     rgb(0xff7b72).into()
 }
@@ -119,10 +106,6 @@ pub fn danger_soft() -> Hsla {
 
 pub fn overlay() -> Hsla {
     rgba(0x000000e6).into()
-}
-
-pub fn hover_panel_bg() -> Hsla {
-    rgba(0x000000fa).into()
 }
 
 pub fn surface_color(surface: Surface) -> u32 {
@@ -184,7 +167,7 @@ pub fn surface_title(surface: Surface) -> &'static str {
         Surface::GameplayShell => "演奏框体",
         Surface::Decision => "选曲决定画面",
         Surface::Transition => "过场动画插画",
-        Surface::Title => "登录前背景",
+        Surface::Title => "标题背景",
         Surface::Login => "登录背景",
         Surface::ModeSelect => "模式选择背景",
         Surface::GameplayBottom => "演奏区域底部框体",
@@ -216,21 +199,4 @@ pub fn surface_description(surface: Surface) -> &'static str {
 pub fn surface_size(config: &Config, surface: Surface) -> (u32, u32) {
     let resolved = config.for_surface(surface);
     (resolved.image.width, resolved.image.height)
-}
-
-pub fn source_label(source: iidxbg::config::Source) -> &'static str {
-    match source {
-        iidxbg::config::Source::Bilibili => "Bilibili",
-        iidxbg::config::Source::File => "Fixed file",
-        iidxbg::config::Source::Local => "本地",
-        iidxbg::config::Source::Remote => "远程",
-        iidxbg::config::Source::Mixed => "混合",
-    }
-}
-
-pub fn fit_label(fit: iidxbg::config::Fit) -> &'static str {
-    match fit {
-        iidxbg::config::Fit::Cover => "裁切填充",
-        iidxbg::config::Fit::Contain => "完整显示",
-    }
 }

@@ -117,6 +117,18 @@ pub(super) fn invalidate() {
         state.choice = choice;
     }
 }
+
+pub(super) fn clear_session() -> bool {
+    if let Some(n) = NATIVE.get()
+        && let Ok(owners) = OWNERS.try_lock()
+        && let Ok(mut state) = BACKDROP.try_lock()
+    {
+        unsafe { restore(&mut state, &owners, n) };
+        true
+    } else {
+        false
+    }
+}
 pub(super) unsafe fn update() {
     let Some(n) = NATIVE.get() else {
         return;

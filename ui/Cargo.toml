@@ -20,3 +20,6 @@ texpresso = "2.0.2"
 async-channel = "2"
 qrcode = { version = "0.14", default-features = false }
 iidxbg = { path = ".." }
+
+[build-dependencies]
+embed-resource = "=3.0.12"

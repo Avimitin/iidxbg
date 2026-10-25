@@ -22,6 +22,17 @@ pub enum Fit {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Global provider defaults retained when resolving a user's modules.
+    #[serde(skip)]
+    pub(crate) asset_defaults: Option<Box<Config>>,
+    /// Canonical source path for local per-user account isolation. No TOML key.
+    #[serde(skip)]
+    pub config_path: PathBuf,
+    /// Cabinet settings and named users are resolved on the worker before use.
+    #[serde(default)]
+    pub pre_login: Option<crate::users::PreLogin>,
+    #[serde(default)]
+    pub users: std::collections::BTreeMap<String, crate::users::User>,
     pub enabled: bool,
     pub source: Source,
     pub local_directory: PathBuf,
@@ -460,14 +471,26 @@ pub struct Image {
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self> {
-        let value: Self = toml::from_str(text)?;
+        let mut value: Self = toml::from_str(text)?;
+        value.promote_shared_artwork()?;
         value.validate()?;
         Ok(value)
     }
 
     pub fn load(path: &Path) -> Result<Self> {
         let mut value = Self::parse(&std::fs::read_to_string(path)?)?;
+        value.config_path = path.canonicalize()?;
         let root = path.parent().unwrap_or(Path::new("."));
+        value.resolve_paths(root);
+        Ok(value)
+    }
+
+    pub fn resolve_paths(&mut self, root: &Path) {
+        if let Some(defaults) = &mut self.asset_defaults {
+            defaults.resolve_paths(root);
+        }
+        crate::users::resolve_paths(self, root);
+        let value = self;
         if value.bilibili.cache_directory.is_relative() {
             value.bilibili.cache_directory = root.join(&value.bilibili.cache_directory);
         }
@@ -517,7 +540,6 @@ impl Config {
                 }
             }
         }
-        Ok(value)
     }
 
     pub fn hide_frame_chara(&self) -> bool {
@@ -560,6 +582,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        crate::users::validate(self)?;
         self.validate_base()?;
         self.mmd.validate()?;
         if self.artwork.len() > 512 {
@@ -602,11 +625,30 @@ impl Config {
     }
 
     pub fn for_artwork(&self, art: &Artwork) -> Self {
-        let mut base = self.clone();
+        let shared;
+        let defaults = if art.scene_scope.is_none() {
+            shared = self.for_assets();
+            &shared
+        } else {
+            self
+        };
+        let mut base = art
+            .source
+            .bind
+            .map(|surface| defaults.for_surface(surface))
+            .unwrap_or_else(|| defaults.clone());
+        base.asset_defaults = None;
+        base.enabled = defaults.enabled;
+        if art.scene_scope.is_none() {
+            base.bilibili.account = None;
+        }
         base.artwork.clear();
-        base.sources.transition = art.source.clone();
-        // Explicit bindings share the selected module's prepared media at runtime.
-        base.sources.transition.bind = None;
+        // Keep independent values stored but inactive while bound, just like modules.
+        base.sources.transition = if art.source.bind.is_some() {
+            SourceOverride::default()
+        } else {
+            art.source.clone()
+        };
         base.surfaces.transition = art.enabled;
         let mut config = base.for_unbound_surface(Surface::Transition);
         config.image.resource = true;
@@ -691,6 +733,9 @@ impl Config {
 
     fn for_unbound_surface(&self, surface: Surface) -> Self {
         let mut c = self.clone();
+        if crate::users::is_pre_login(surface) {
+            c.bilibili.account = None;
+        }
         let o = match surface {
             Surface::Results => &self.sources.results,
             Surface::SongSelect => &self.sources.song_select,

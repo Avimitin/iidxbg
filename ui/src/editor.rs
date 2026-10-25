@@ -5,7 +5,7 @@ use gpui::{
 };
 use gpui_kit::component::{
     Sizable, StyledExt,
-    button::Button,
+    button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement,
@@ -212,7 +212,7 @@ impl SurfaceEditor {
             .collect();
         let mut editor = Self {
             surface,
-            page: EditorPage::Media,
+            page: EditorPage::Display,
             search: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(if surface == Surface::SongSelect {
                     "搜索设置，如 Qpro、BPM、图片…"
@@ -263,8 +263,17 @@ impl SurfaceEditor {
 }
 impl AppView {
     fn editor_page(&mut self, page: EditorPage, window: &mut Window, cx: &mut Context<Self>) {
+        let config = self.editor_config();
         if let Some(editor) = &mut self.editor {
-            editor.page = page;
+            let independent = config
+                .binding_root(editor.surface)
+                .unwrap_or(editor.surface)
+                == editor.surface;
+            editor.page = if page.available(editor.surface, independent) {
+                page
+            } else {
+                EditorPage::Display
+            };
             editor.query.clear();
             editor
                 .search
@@ -276,8 +285,15 @@ impl AppView {
 
     fn rebuild_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(old) = self.editor.take() {
-            let mut editor = SurfaceEditor::new(old.surface, &self.editor_config(), window, cx);
-            editor.page = old.page;
+            let config = self.editor_config();
+            let mut editor = SurfaceEditor::new(old.surface, &config, window, cx);
+            let independent =
+                config.binding_root(old.surface).unwrap_or(old.surface) == old.surface;
+            editor.page = if old.page.available(old.surface, independent) {
+                old.page
+            } else {
+                EditorPage::Display
+            };
             editor.query = old.query;
             editor.search.update(cx, |input, cx| {
                 input.set_value(editor.query.clone(), window, cx)
@@ -460,9 +476,11 @@ fn field_row(
                 )
                 .when(picker, |row| {
                     row.child(
-                        Button::new(SharedString::from(format!("pick-{}", field.key())))
+                        widgets::button(SharedString::from(format!("pick-{}", field.key())))
                             .large()
-                            .outline()
+                            .ghost()
+                            .border_1()
+                            .border_color(theme::line())
                             .label("浏览…")
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 view.pick_surface_directory(field, window, cx)
