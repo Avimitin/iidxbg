@@ -4,9 +4,9 @@
 
 把游戏里的结算插画换成你喜欢的图片或视频；也可以进一步替换选曲画面、SUDDEN+、LIFT、目标分数图和 Premium/集中模式背景。媒体可以来自固定文件、随机文件夹，图片也可以从 Moebooru 兼容 API 获取。
 
-<img src="docs/config-gui.png" alt="iidxbg 配置界面" width="900">
+<a href="docs/config-gui.png"><img src="docs/config-gui.png" alt="显示组件首页：各模块的图片预览与常驻名称" width="900"></a>
 
-*SUDDEN+ 配置界面：独立选择媒体，或绑定 LIFT / 目标分数图。*
+*显示组件：预览各模块，点击画面进入设置。*
 
 ## 这是什么
 
@@ -21,6 +21,26 @@
 - 附带 **iidxbg-config.exe** 配置界面，不需要手动编辑配置文件
 - 选曲角色可导入 PMX + VMD 实时动画，并分别配置平时、滚动和成绩反应动作；仅限已验证的 010-0917 构建，详见 [MMD 说明](docs/mmd-character.md)
 - 每次有效修改立即保存，没有“保存”按钮
+
+## 配置界面
+
+点击截图可查看原图。
+
+| 用户切换 | 用户与卡片 |
+|---|---|
+| [<img src="docs/config-users.png" alt="左下角用户菜单：创建、搜索与一键切换，当前用户置顶" width="440">](docs/config-users.png) | [<img src="docs/config-account.png" alt="用户与卡片：同一用户绑定多张卡，并独立绑定 Bilibili 账号" width="440">](docs/config-account.png) |
+| 搜索名称或卡号，当前用户以绿色置顶。 | 多张卡共用用户设置，Bilibili 账号按用户绑定。 |
+
+| 模块设置 | 媒体来源 |
+|---|---|
+| [<img src="docs/config-settings.png" alt="SUDDEN+ 设置：单独设置或共享 LIFT、目标分数图，并选择图片适配方式" width="440">](docs/config-settings.png) | [<img src="docs/config-media.png" alt="媒体来源：图片与视频、随机文件夹、图片网站、混合来源及 Bilibili" width="440">](docs/config-media.png) |
+| 选择共享媒体与图片适配方式，修改自动保存。 | 选择本地或在线来源；仅在「单独设置」时显示。 |
+
+<a href="docs/config-assets.png"><img src="docs/config-assets.png" alt="游戏素材：置顶的标题与登录背景，以及可搜索的素材目录" width="900"></a>
+
+*游戏素材：标题、登录背景与直接素材替换对所有用户及游客共用。*
+
+截图使用演示用户、卡号、本地图片与素材目录；安装包不包含示例图片。
 
 ## 怎么用
 
@@ -83,9 +103,8 @@
 
 最新版本：[GitHub Releases](https://github.com/Avimitin/iidxbg/releases)
 
-当前版本：**0.4.1**。配置界面采用直角边框、更大的文字与间距；侧栏仅显示图标，
-灰色表示未选中，绿色表示当前页面，悬停可查看名称。标题栏只保留标题和窗口控制。
-支持 Bilibili 点播来源、扫码登录与直播间播放。
+当前版本：**0.6.0**。支持多用户切换、多卡绑定与按用户绑定 Bilibili 账号；
+顶栏「游戏素材」集中管理所有用户共用的替换内容。
 
 ## Bilibili 来源
 

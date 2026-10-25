@@ -4,6 +4,15 @@ A Windows desktop editor for `iidxbg.toml`, built with **Rust**, **GPUI**, and
 [**GPUI Kit**](https://github.com/longbridge/gpui-kit). It is a separate optional
 binary; the plugin still ships `iidxbg.dll` and `iidxbg.toml` on its own.
 
+## Screenshots
+
+<a href="../docs/config-gui.png"><img src="../docs/config-gui.png" alt="Display components with local artwork previews and persistent module names" width="900"></a>
+
+[View the screenshot gallery](../README.md#配置界面) for user switching, card and
+Bilibili bindings, module settings, media sources, and shared game assets.
+Captured from the Windows release UI (v0.6.0), using demo users, card numbers,
+local artwork and an example asset catalog. Sample artwork is not bundled.
+
 ## What it does
 
 - Bottom-left user menu: compact scrollable rows, name/card keyword search,
