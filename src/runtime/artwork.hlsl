@@ -10,6 +10,9 @@ float4 main(float2 uv : TEXCOORD0, float4 colour : COLOR0) : COLOR0 {
     float2 local = (uv - tile.xy) * tile.zw;
     float2 mapped = local * crop.xy + crop.zw;
     float4 art = tex2D(media, mapped);
+    // A live model target contains premultiplied RGB from transparent rendering.
+    // Native AFP consumes straight-alpha artwork.
+    art.rgb = lerp(art.rgb, art.rgb / max(art.a, 0.00001), mode.z);
     float mask = lerp(1.0, tex2D(native_art, uv).a, mode.x);
     float inside = step(0.0, mapped.x) * step(mapped.x, 1.0)
                  * step(0.0, mapped.y) * step(mapped.y, 1.0);

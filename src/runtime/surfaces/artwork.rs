@@ -5,8 +5,7 @@ use std::cell::RefCell;
 
 mod loose;
 mod scenes;
-#[path = "../artwork_shader.rs"]
-mod shader;
+use crate::artwork_shader as shader;
 mod shape;
 
 pub(super) fn library_hook(n: &Native) -> Option<(&'static str, usize, *const ())> {
@@ -248,6 +247,19 @@ unsafe fn acquire(
         unsafe { media.update() }.ok()?;
         return Some(media);
     }
+    if target == Target::Character
+        && !HIDE_FRAME_CHARA.load(Ordering::Acquire)
+        && crate::mmd::ACTIVE.load(Ordering::Acquire)
+        && let Some(model) = crate::mmd::snapshot()
+    {
+        let media = unsafe { GpuMedia::acquire_model(n, model) }.ok()?;
+        unsafe { media.update() }.ok()?;
+        state.character = Some(media.clone());
+        return Some(media);
+    }
+    if target == Target::Character && state.character.as_ref().is_some_and(|m| m.model.is_some()) {
+        state.character = None;
+    }
     let (asset, slot) = if let Some(index) = media_slot(target) {
         (snapshot()?.artwork[index].clone()?, &mut state.media[index])
     } else {
@@ -290,9 +302,49 @@ fn crop(source: [f32; 2], target: [f32; 2], contain: bool) -> [f32; 4] {
     [x, y, (1. - x) * 0.5, (1. - y) * 0.5]
 }
 
+/// Place the complete transparent canvas inside the native character tile.
+/// Reserve the upper HUD and bottom controls; never change native draw order.
+fn model_crop(source: [f32; 2], target: [f32; 2], placement: [f32; 3]) -> [f32; 4] {
+    let fit = crop(source, target, true);
+    let scale = (placement[0] / 100.).min(0.96 * fit[0]).min(0.77 * fit[1]);
+    let sx = fit[0] / scale;
+    let sy = fit[1] / scale;
+    let cx = (placement[1] / 100.)
+        .max(0.02 + 0.5 / sx)
+        .min(0.98 - 0.5 / sx);
+    let cy = (placement[2] / 100.)
+        .max(0.13 + 0.5 / sy)
+        .min(0.90 - 0.5 / sy);
+    [sx, sy, 0.5 - sx * cx, 0.5 - sy * cy]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn model_placement_preserves_aspect_and_reserves_hud_space() {
+        for source in [[512., 768.], [1024., 128.], [128., 1024.]] {
+            for target in [[842., 1080.], [998., 1076.]] {
+                for placement in [
+                    [42., 20., 32.],
+                    [100., 0., 0.],
+                    [100., 100., 100.],
+                    [10., 50., 50.],
+                ] {
+                    let [sx, sy, ox, oy] = model_crop(source, target, placement);
+                    let bounds = [-ox / sx, (1. - ox) / sx, -oy / sy, (1. - oy) / sy];
+                    assert!(bounds[0] >= 0.02 - 1e-6 && bounds[1] <= 0.98 + 1e-6);
+                    assert!(bounds[2] >= 0.13 - 1e-6 && bounds[3] <= 0.90 + 1e-6);
+                    let aspect = (target[0] / sx) / (target[1] / sy);
+                    assert!((aspect - source[0] / source[1]).abs() < 1e-5);
+                }
+            }
+        }
+        let [sx, sy, ox, oy] = model_crop([512., 768.], [842., 1080.], [42., 20., 32.]);
+        assert!(((0.5 - ox) / sx - 0.20).abs() < 1e-6);
+        // Upward placement stops at the HUD margin, including animation travel.
+        assert!((-oy / sy - 0.13).abs() < 1e-6);
+    }
     #[test]
     fn native_archive_paths_match_catalog_keys() {
         for path in [
@@ -337,6 +389,7 @@ struct Atlas {
 unsafe impl Send for Atlas {}
 #[derive(Clone, PartialEq)]
 struct TileKey {
+    revision: u64,
     uv: [f32; 4],
     target: Target,
     native_mask: bool,
@@ -388,6 +441,7 @@ unsafe extern "system" fn frame() -> usize {
             return;
         }
         unsafe { scenes::update() };
+        super::tick_qpro();
         let revision = REVISION.load(Ordering::Acquire);
         if revision == APPLIED_REVISION.load(Ordering::Relaxed) && !DYNAMIC.load(Ordering::Relaxed)
         {
@@ -490,9 +544,10 @@ unsafe extern "system" fn frame() -> usize {
             }
             let keys: Vec<_> = tiles
                 .iter()
-                .map(|(t, _, p)| {
+                .map(|(t, m, p)| {
                     (
                         TileKey {
+                            revision: m.revision.load(Ordering::Relaxed),
                             uv: t.uv,
                             target: t.target,
                             native_mask: t.native_mask,
@@ -709,7 +764,20 @@ unsafe fn compose(
                 );
                 // Native character layers extend behind the top/bottom HUD.
                 // Inset the transparent cutout while retaining the native motion.
-                if character {
+                if character && let Some(placement) = media.model_placement {
+                    if media.model_keep_hud_clear {
+                        crop = model_crop(
+                            [source.width as f32, source.height as f32],
+                            tile.size,
+                            placement,
+                        );
+                    } else {
+                        crop[0] /= placement[0] / 100.;
+                        crop[1] /= placement[0] / 100.;
+                        crop[2] = 0.5 - crop[0] * placement[1] / 100.;
+                        crop[3] = 0.5 - crop[1] * placement[2] / 100.;
+                    }
+                } else if character {
                     crop[0] /= 0.82;
                     crop[1] /= 0.82;
                     crop[2] = (1. - crop[0]) * 0.5;
@@ -726,7 +794,7 @@ unsafe fn compose(
                     crop[3],
                     if tile.native_mask { 1. } else { 0. },
                     if character { 1. } else { 0. },
-                    0.,
+                    if media.model.is_some() { 1. } else { 0. },
                     0.,
                 ];
                 let raw = source.wrapper[1] as *mut c_void;

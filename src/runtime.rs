@@ -1,4 +1,5 @@
 //! Shared verified ABI; native addresses/layouts come from exact-build profiles.
+mod reactions;
 mod surfaces;
 use crate::{
     Error, Result,
@@ -106,6 +107,14 @@ fn event(value: Event) {
     }
 }
 
+pub(crate) fn trace_mmd_scratch(side: usize, direction: i32) {
+    event(Event::Diag(format!(
+        "MMD Spice scratch P{}: {} motion trigger",
+        side + 1,
+        if direction < 0 { "up" } else { "down" }
+    )));
+}
+
 struct Native {
     base: usize,
     profile: profile::Profile,
@@ -174,6 +183,28 @@ struct Texture {
 }
 
 impl Texture {
+    unsafe fn wrap(
+        native: &Native,
+        texture: &IDirect3DTexture9,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let mut wrapper = Box::new([0u64; 8]);
+        let wrap: Wrap = unsafe { native.function("texture_wrap") };
+        unsafe {
+            wrap(wrapper.as_mut_ptr(), texture.as_raw());
+        }
+        let result = Self {
+            wrapper,
+            center: [width as f32 * 0.5, height as f32 * 0.5],
+            width,
+            height,
+        };
+        if result.wrapper[1] == 0 || result.wrapper[2] as u32 == 0 {
+            return Err(Error::Native("AFP model texture registration"));
+        }
+        Ok(result)
+    }
     unsafe fn upload(native: &Native, image: &Prepared) -> Result<Self> {
         let get_device: Device = unsafe { native.function("get_device") };
         let raw = unsafe { get_device() };
@@ -393,6 +424,7 @@ impl Graphics {
             return;
         }
         if !self.selection.active {
+            unsafe { reactions::result(n) };
             let pending = PENDING.try_lock().ok().and_then(|mut p| p.take());
             self.selection.enter(pending);
             self.playback = self
@@ -1071,6 +1103,38 @@ fn reload_request(
     HIDE_FRAME_CHARA.store(config.hide_frame_chara(), Ordering::Release);
     PREMIUM_AREA_ENABLED.store(providers.enabled(Surface::PremiumArea), Ordering::Release);
     CONCENTRATION_ENABLED.store(providers.enabled(Surface::Concentration), Ordering::Release);
+    let model_supported = NATIVE
+        .get()
+        .is_some_and(|n| n.profile.rvas.contains_key("reaction_grade"));
+    match character.mmd.refresh(
+        &config.mmd,
+        root,
+        config.enabled
+            && (config.selection.frame_chara || config.mmd.replace_qpro)
+            && model_supported,
+    ) {
+        Ok(true) => {
+            surfaces::character_changed();
+            if let Some(model) = crate::mmd::snapshot() {
+                log(
+                    root,
+                    &format!(
+                        "MMD prepared: {} ({} vertices)",
+                        model.first.label,
+                        model.parsed.geometry.positions.len() / 3
+                    ),
+                );
+                for warning in &model.warnings {
+                    log(root, &format!("MMD: {warning}"));
+                }
+            }
+        }
+        Ok(false) => {}
+        Err(e) => log(
+            root,
+            &format!("MMD import rejected: {e}; retaining previous character"),
+        ),
+    }
     match character.refresh(config, root) {
         Ok(crate::character::Update::Unchanged) => {}
         Ok(crate::character::Update::Native) => surfaces::publish_character(None),
@@ -1134,6 +1198,10 @@ extern "C" fn graphics(event_id: u32, _: *const Frame, _: *mut c_void) {
 }
 
 extern "C" fn shutdown() {
+    crate::mmd::input::configure(0, 0);
+    crate::mmd::INTERACTIVE.store(false, Ordering::Release);
+    crate::mmd::ACTIVE.store(false, Ordering::Release);
+    crate::mmd::SELECTED_BPM.store(0, Ordering::Release);
     ENABLED.store(false, Ordering::Release);
     STOP.store(true, Ordering::Release);
     if let Some(state) = graphics_state()
@@ -1201,6 +1269,8 @@ pub unsafe extern "C" fn spice_sdk_entry_point(init: Option<Init>) -> i32 {
     }
     let (tx, rx) = mpsc::sync_channel(64);
     let _ = EVENTS.set(tx);
+    // SPICE_SDK_V0: get_analog slot 5, get_button slot 3 (v0.1 ABI).
+    crate::mmd::input::configure(sdk.functions[5], sdk.functions[3]);
     match thread::Builder::new()
         .name("iidxbg-images".into())
         .spawn(move || worker(root, rx))

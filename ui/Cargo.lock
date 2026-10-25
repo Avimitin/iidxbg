@@ -2128,6 +2128,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f70749695b063ecbf6b62949ccccde2e733ec3ecbbd71d467dca4e5c6c97cca0"
+
+[[package]]
 name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3277,10 +3283,12 @@ name = "iidxbg"
 version = "0.5.0"
 dependencies = [
  "fastrand",
+ "glam",
  "hex",
  "image",
  "md5",
  "minhook",
+ "mmd-anim",
  "reqwest",
  "serde",
  "serde_json",
@@ -4026,6 +4034,40 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mmd-anim"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8693d95ebb29e31c951c4620c2d0bf9cec0607d7c6584cad5a2ea74a2b1117c"
+dependencies = [
+ "mmd-anim-format",
+ "mmd-anim-runtime",
+]
+
+[[package]]
+name = "mmd-anim-format"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9412f71423399624ad50562ec178e8ecc7b72e435d130445eae72460915dff2b"
+dependencies = [
+ "encoding_rs",
+ "glam",
+ "mmd-anim-runtime",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mmd-anim-runtime"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee0a12de57173c5224035820249f75fee08af5c50e309454ce116b14abe60a8"
+dependencies = [
+ "glam",
+ "rayon",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

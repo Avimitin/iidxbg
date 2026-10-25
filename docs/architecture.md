@@ -1,5 +1,22 @@
 # Version support
 
+User-imported real-time PMX/VMD characters use a separate CPU animation worker
+and graphics-owner D3D9 renderer, feeding the existing character atlas adapter.
+Assets and completed vertices are owned snapshots; no file IO or animation
+evaluation occurs in game/graphics callbacks. See [MMD behavior](mmd-character.md)
+and [exact-build signal evidence](iidx34-mmd-reactions.md). This opt-in path is
+limited to the verified 010-0917 hash; existing result visit freezing is unchanged.
+Optional selected-song BPM matching publishes only a copied scalar from the
+post-original selection callback, at most 4 Hz; the worker advances the idle
+motion clock. Condition motions keep their original speed. Model-only atlas
+placement preserves native ordering and reserves tile margins for the HUD.
+See [tempo and placement evidence](iidx34-mmd-tempo.md).
+An independent selection-Qpro option shares that model/session and follows the
+native Qpro anchors. Root visibility is restored before original updates and
+cleanup, with pooled layer identities checked. A cached GPU straight-alpha copy
+feeds native sprites; no second model evaluation or game readback is needed.
+See [Qpro ownership and ABI evidence](iidx34-mmd-qpro.md).
+
 Ship one `iidxbg.dll` for IIDX, with an independently verified profile for each
 supported build. This is explicit support for known binaries, not automatic
 compatibility with older or newer versions.

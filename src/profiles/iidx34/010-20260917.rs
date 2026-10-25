@@ -6,6 +6,83 @@ use crate::profile::{Layout, LibraryProfile, Profile, Table, native_entries, off
 
 pub(super) fn profile() -> Profile {
     let (rvas, guards) = native_entries(&[
+        // Native Qpro selection component; docs/iidx34-mmd-qpro.md.
+        ("qpro_manager", 0x806020, "488d05d9a2910ac3cccccccccccccccc"),
+        ("qpro_player", 0x805070, "48895c2408574883ec204863da488bf9"),
+        ("qpro_layer", 0x800670, "48895c2408574883ec204863fa488bd9"),
+        (
+            "qpro_player_count",
+            0x92fda0,
+            "40534883ec2033c0390502b6cd0a0f95",
+        ),
+        (
+            "qpro_scene_layout",
+            0x8d64f7,
+            "488d8f10210000e8dd900b00904c89bf",
+        ),
+        (
+            "qpro_priority_layout",
+            0x8da53d,
+            "41b877000000488d8f10210000488bd0",
+        ),
+        (
+            "qpro_transform_update",
+            0x98f850,
+            "40534883ec4080791000488bd90f8420",
+        ),
+        (
+            "qpro_visibility_update",
+            0x98f7e0,
+            "40574883ec2080791000488bf9743c48",
+        ),
+        ("qpro_cleanup", 0x98f7b0, "40534883ec20488bd9488b49084885c9"),
+        (
+            "qpro_transfer",
+            0x81c4e0,
+            "48896c241856415641574883ec50458b",
+        ),
+        (
+            "qpro_scale_layout",
+            0x32b330,
+            "4883ec288b89000200004c8d442430ba",
+        ),
+        // Optional selection-only tempo; docs/iidx34-mmd-tempo.md.
+        ("tempo_bar", 0x5fa240, "4883ec284881c118030000e840c9ffff"),
+        ("tempo_song", 0x5fa3b0, "48895c2408574883ec20488bd9b9e803"),
+        (
+            "tempo_difficulty",
+            0x5fa410,
+            "40534883ec204881c1180300008bdae8",
+        ),
+        ("tempo_player", 0x92fb50, "4883ec28e84702000083f801751533c9"),
+        ("tempo_style", 0x92fcc0, "8b05deb6cd0ac3cccccccccccccccccc"),
+        ("tempo_layout", 0x92fe50, "4883ec28e8f71af4ff488bc8e8bf4bf5"),
+        (
+            "tempo_bpm_layout",
+            0x6281f7,
+            "8b84defc03000089471c8b84de000400",
+        ),
+        (
+            "tempo_level_layout",
+            0x93942d,
+            "0fb68c08ec030000fec980f90b0f96c0",
+        ),
+        // Optional companion reactions, verified in iidx34-mmd-reactions.md.
+        (
+            "reaction_grade",
+            0x919540,
+            "48895c24084889742410574883ec200f",
+        ),
+        (
+            "reaction_joined",
+            0x92fd00,
+            "85c9781783f90273124863c1488d0d9d",
+        ),
+        (
+            "reaction_grade_formula",
+            0x8195b0,
+            "85d27506b807000000c38d04c98d0c12",
+        ),
         (
             "artwork_login_setup",
             0x8a06a0,
@@ -276,6 +353,14 @@ pub(super) fn profile() -> Profile {
             },
         ],
         surface_data: offsets(&[
+            ("qpro_component", 8464),
+            ("qpro_vtable", 0xd86e58),
+            ("qpro_priority", 119),
+            ("reaction_scene_state", 88),
+            ("tempo_widget", 416),
+            ("tempo_music_id", 0x67c),
+            ("tempo_levels", 0x3ec),
+            ("tempo_bpm", 0x3fc),
             ("artwork_texture_info", 0xc66da0),
             ("artwork_native_id", 0xc66d78),
             ("note_batches", 0xc38f720),

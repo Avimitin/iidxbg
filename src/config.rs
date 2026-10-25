@@ -38,6 +38,8 @@ pub struct Config {
     pub sources: Sources,
     #[serde(default)]
     pub selection: SelectionOptions,
+    #[serde(default)]
+    pub mmd: crate::mmd::Settings,
     /// Optional silent local video for ordinary song results. Empty uses images.
     #[serde(default)]
     pub results_video: PathBuf,
@@ -511,6 +513,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         self.validate_base()?;
+        self.mmd.validate()?;
         if self.artwork.len() > 512 {
             return Err(Error::Config("at most 512 custom artwork entries"));
         }

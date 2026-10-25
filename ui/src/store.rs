@@ -265,6 +265,9 @@ fn string_value(value: &str) -> Value {
 pub fn set_u64(doc: &mut DocumentMut, path: &[&str], value: u64) {
     set_value(doc, path, Value::from(value as i64));
 }
+pub fn set_f64(doc: &mut DocumentMut, path: &[&str], value: f64) {
+    set_value(doc, path, Value::from(value));
+}
 
 #[cfg(test)]
 pub fn set_u32(doc: &mut DocumentMut, path: &[&str], value: u32) {
@@ -414,6 +417,56 @@ mod tests {
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
         assert!(store.saved_at().is_some());
 
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn mmd_condition_paths_survive_reload_and_invalid_rate_keeps_disk() {
+        let (dir, path) = fixture_path();
+        let mut store = ConfigStore::load(&path).unwrap();
+        let paths = [
+            ("motion_path", r"D:\动作\dance.vmd"),
+            ("scroll_up_motion_path", r"D:\动作\up.vmd"),
+            ("scroll_down_motion_path", r"D:\动作\down.vmd"),
+            ("happy_motion_path", r"D:\动作\happy.vmd"),
+            ("other_result_motion_path", r"D:\动作\other.vmd"),
+        ];
+        assert!(store.edit(|doc| {
+            set_bool(doc, &["mmd", "enabled"], true);
+            set_string(doc, &["mmd", "model_path"], r"D:\模型\model.pmx");
+            set_bool(doc, &["mmd", "bpm_sync"], true);
+            set_f64(doc, &["mmd", "motion_bpm"], 148.5);
+            set_f64(doc, &["mmd", "display_scale"], 42.);
+            set_f64(doc, &["mmd", "position_x"], 20.);
+            set_f64(doc, &["mmd", "position_y"], 32.);
+            set_bool(doc, &["mmd", "replace_qpro"], true);
+            set_bool(doc, &["mmd", "keep_hud_clear"], false);
+            set_f64(doc, &["mmd", "qpro_height"], 360.);
+            for (key, value) in paths {
+                set_string(doc, &["mmd", key], value);
+            }
+        }));
+        assert!(store.reload());
+        assert!(store.config().mmd.bpm_sync);
+        assert_eq!(store.config().mmd.motion_bpm, 148.5);
+        assert_eq!(store.config().mmd.display_scale, 42.);
+        assert_eq!(store.config().mmd.position_x, 20.);
+        assert_eq!(store.config().mmd.position_y, 32.);
+        assert!(store.config().mmd.replace_qpro);
+        assert!(!store.config().mmd.keep_hud_clear);
+        assert_eq!(store.config().mmd.qpro_height, 360.);
+        for (actual, (_, expected)) in store.config().mmd.motion_paths().iter().zip(paths) {
+            assert_eq!(*actual, Path::new(expected));
+        }
+        let before = fs::read(&path).unwrap();
+        assert!(!store.edit(|doc| set_u64(doc, &["mmd", "fps"], 120)));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(!store.edit(|doc| {
+            set_u64(doc, &["mmd", "fps"], 30);
+            set_f64(doc, &["mmd", "motion_bpm"], 0.);
+        }));
+        assert_eq!(fs::read(&path).unwrap(), before);
         fs::remove_file(path).unwrap();
         fs::remove_dir(dir).unwrap();
     }

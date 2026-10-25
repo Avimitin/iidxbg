@@ -29,6 +29,7 @@ pub enum Update {
 pub struct LocalImage {
     // None = not checked yet; Some(None) = native artwork.
     attempted: Option<Option<Fingerprint>>,
+    pub(crate) mmd: crate::mmd::Loader,
 }
 
 impl LocalImage {

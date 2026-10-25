@@ -151,6 +151,11 @@ fn prepare(config_path: &Path, target: Surface) -> Result<Prepared, String> {
     if !config.enabled {
         return Err("全局总开关已关闭".into());
     }
+    if target == Surface::SongSelect && config.mmd.enabled {
+        let model = iidxbg::mmd::load(&config.mmd, config_path.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| describe(&e))?;
+        return iidxbg::mmd::render::preview(model, 0., [0., 0.], 0.).map_err(|e| describe(&e));
+    }
     let resolved = config.for_surface(target);
     if resolved.source == Source::Local && !resolved.local_directory.is_dir() {
         return Err(format!(

@@ -35,6 +35,7 @@ for package in sorted(packages.values(), key=lambda p: (p["name"], p["version"])
         output.append(f"\n--- {path.relative_to(directory)} ---\n"
                       f"{path.read_text(encoding='utf-8', errors='replace')}\n")
 output.append((root / "licenses/ifs-reader.txt").read_text("utf-8"))
+output.append((root / "licenses/mmd-anim.txt").read_text("utf-8"))
 notice = "\n".join(line.rstrip() for line in "\n".join(output).splitlines()) + "\n"
 (root / "THIRD-PARTY-NOTICES.txt").write_text(notice, encoding="utf-8")
 print(f"Notices generated for {len(packages) - 2} dependencies and the IFS reader references.")

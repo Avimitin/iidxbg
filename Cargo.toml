@@ -23,12 +23,14 @@ hex = "0.4"
 md5 = "0.7"
 tempfile = "3"
 fastrand = "2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp"] }
+mmd-anim = "=0.5.3"
+glam = "0.32"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 minhook = "0.9.0"
-windows = { version = "0.62", features = ["Win32_Graphics_Direct3D9", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D9", "Win32_UI_WindowsAndMessaging", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Memory",
   "Win32_System_Threading", "Win32_System_Diagnostics_Debug",

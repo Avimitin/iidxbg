@@ -3,6 +3,7 @@ pub mod character;
 pub mod config;
 pub mod hook_chain;
 pub mod media;
+pub mod mmd;
 pub mod pixels;
 mod presets;
 pub mod profile;
@@ -59,8 +60,13 @@ pub enum Error {
     Native(&'static str),
     #[error("Video: {0}")]
     Video(String),
+    #[error("MMD: {0}")]
+    Mmd(String),
     #[error("Bilibili: {0}")]
     Bilibili(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+#[cfg(windows)]
+#[path = "runtime/artwork_shader.rs"]
+mod artwork_shader;

@@ -15,6 +15,37 @@ fn main() {
 fn run() -> iidxbg::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("mmd-inspect") if args.len() == 3 || args.len() == 4 => {
+            let settings = iidxbg::mmd::Settings {
+                model_path: args[2].clone().into(),
+                motion_path: args.get(3).cloned().unwrap_or_default().into(),
+                ..Default::default()
+            };
+            let model = iidxbg::mmd::load(&settings, Path::new("."))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"name":model.parsed.metadata.name,"vertices":model.parsed.geometry.positions.len()/3,
+                "bones":model.parsed.skeleton.bones.iter().map(|b|&b.name).collect::<Vec<_>>(),"morphs":model.parsed.morphs.iter().map(|m|&m.name).collect::<Vec<_>>(),"warnings":model.warnings})
+                )?
+            );
+        }
+        #[cfg(windows)]
+        Some("mmd-preview") if args.len() == 4 || args.len() == 5 => {
+            let path = Path::new(&args[2]);
+            let config = Config::load(path)?;
+            let model = iidxbg::mmd::load(&config.mmd, path.parent().unwrap_or(Path::new(".")))?;
+            let seconds = args.get(4).map_or(Ok(0.), |s| {
+                s.parse::<f32>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s >= 0.)
+                    .ok_or(iidxbg::Error::Config(
+                        "preview seconds must be a finite nonnegative number",
+                    ))
+            })?;
+            let image = iidxbg::mmd::render::preview(model, seconds, [0., 0.], 0.)?;
+            pixels::write_preview(&image, Path::new(&args[3]))?;
+        }
         Some("profiles") if args.len() == 2 => {
             println!("{}", serde_json::to_string_pretty(&profile::supported())?);
         }
@@ -154,7 +185,7 @@ fn run() -> iidxbg::Result<()> {
         }
         _ => {
             eprintln!(
-                "iidxbg-tool profiles\niidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>\niidxbg-tool live-check <room-id> <output-directory> <seconds>"
+                "iidxbg-tool profiles\niidxbg-tool verify <bm2dx.dll>\niidxbg-tool prepare <iidxbg.toml> <preview.png>\niidxbg-tool test-image <output.png>\niidxbg-tool bilibili-check <iidxbg.toml> <output-directory>\niidxbg-tool live-check <room-id> <output-directory> <seconds>\niidxbg-tool mmd-inspect <model.pmx> [motion.vmd]\niidxbg-tool mmd-preview <iidxbg.toml> <preview.png> [seconds]"
             );
             std::process::exit(2);
         }

@@ -170,6 +170,12 @@ impl AppView {
         let prompt = match field {
             SurfaceTextField::MediaPath => "选择图片或视频",
             SurfaceTextField::FrameCharaImage => "选择角色图片",
+            SurfaceTextField::MmdModel => "选择 PMX 模型",
+            SurfaceTextField::MmdMotion
+            | SurfaceTextField::MmdScrollUp
+            | SurfaceTextField::MmdScrollDown
+            | SurfaceTextField::MmdHappyMotion
+            | SurfaceTextField::MmdOtherResult => "选择 VMD 动作",
             SurfaceTextField::LocalDirectory => "选择组件本地图片目录",
             SurfaceTextField::SaveDirectory => "选择组件下载保存目录",
             _ => return,
@@ -177,11 +183,25 @@ impl AppView {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: matches!(
                 field,
-                SurfaceTextField::MediaPath | SurfaceTextField::FrameCharaImage
+                SurfaceTextField::MediaPath
+                    | SurfaceTextField::FrameCharaImage
+                    | SurfaceTextField::MmdModel
+                    | SurfaceTextField::MmdMotion
+                    | SurfaceTextField::MmdScrollUp
+                    | SurfaceTextField::MmdScrollDown
+                    | SurfaceTextField::MmdHappyMotion
+                    | SurfaceTextField::MmdOtherResult
             ),
             directories: !matches!(
                 field,
-                SurfaceTextField::MediaPath | SurfaceTextField::FrameCharaImage
+                SurfaceTextField::MediaPath
+                    | SurfaceTextField::FrameCharaImage
+                    | SurfaceTextField::MmdModel
+                    | SurfaceTextField::MmdMotion
+                    | SurfaceTextField::MmdScrollUp
+                    | SurfaceTextField::MmdScrollDown
+                    | SurfaceTextField::MmdHappyMotion
+                    | SurfaceTextField::MmdOtherResult
             ),
             multiple: false,
             prompt: Some(prompt.into()),

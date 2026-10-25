@@ -3,6 +3,7 @@ use super::*;
 use crate::media::{Asset, Playback};
 use minhook::MinHook;
 mod artwork;
+mod qpro;
 
 #[derive(Default)]
 pub(super) struct Bundle {
@@ -409,7 +410,20 @@ struct GpuMedia {
     texture: Arc<Texture>,
     playback: Mutex<Playback>,
     failed: AtomicBool,
+    model: Option<Mutex<ModelGpu>>,
+    model_placement: Option<[f32; 3]>,
+    model_keep_hud_clear: bool,
+    revision: AtomicU64,
 }
+
+struct ModelGpu {
+    renderer: crate::mmd::render::Renderer,
+    session: Arc<crate::mmd::Session>,
+    straight: Option<Arc<Texture>>,
+}
+// Same owner invariant as Atlas: only graphics-owner frame/invalidate callbacks
+// access or drop this object. Workers receive only owned CPU model/pose data.
+unsafe impl Send for ModelGpu {}
 
 impl GpuMedia {
     unsafe fn acquire(n: &Native, asset: &Asset) -> Result<Arc<Self>> {
@@ -433,6 +447,10 @@ impl GpuMedia {
             texture,
             playback: Mutex::new(playback),
             failed: AtomicBool::new(false),
+            model: None,
+            model_placement: None,
+            model_keep_hud_clear: true,
+            revision: AtomicU64::new(0),
         });
         cache.push(Arc::downgrade(&shared));
         Ok(shared)
@@ -441,6 +459,36 @@ impl GpuMedia {
     unsafe fn update(&self) -> Result<()> {
         if self.failed.load(Ordering::Relaxed) {
             return Err(Error::Native("shared texture unavailable until reset"));
+        }
+        if let Some(model) = &self.model {
+            if !crate::mmd::ACTIVE.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            if let Ok(mut model) = model.try_lock() {
+                if model.session.failed() {
+                    self.failed.store(true, Ordering::Relaxed);
+                    return Err(Error::Mmd("animation worker stopped".into()));
+                }
+                let Some(frame) = model.session.frame() else {
+                    return Ok(());
+                };
+                let n = NATIVE.get().ok_or(Error::Native("model native owner"))?;
+                let get: Device = unsafe { n.function("get_device") };
+                let raw = unsafe { get() };
+                let device = unsafe { IDirect3DDevice9::from_raw_borrowed(&raw) }
+                    .ok_or(Error::Native("model device"))?;
+                if let Err(e) = unsafe { model.renderer.draw(device, &frame) } {
+                    self.failed.store(true, Ordering::Relaxed);
+                    return Err(Error::Mmd(e.to_string()));
+                }
+                self.revision
+                    .store(model.renderer.serial, Ordering::Relaxed);
+                if model.straight.is_some() {
+                    unsafe { model.renderer.straight(device) }
+                        .map_err(|e| Error::Mmd(e.to_string()))?;
+                }
+            }
+            return Ok(());
         }
         if let Ok(mut playback) = self.playback.try_lock()
             && playback.update()
@@ -451,6 +499,78 @@ impl GpuMedia {
         }
         Ok(())
     }
+
+    unsafe fn acquire_model(n: &Native, model: Arc<crate::mmd::Model>) -> Result<Arc<Self>> {
+        let mut cache = MEDIA
+            .try_lock()
+            .map_err(|_| Error::Native("media cache busy"))?;
+        cache.retain(|entry| entry.strong_count() != 0);
+        if let Some(shared) = cache
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .find(|m| Arc::ptr_eq(&m.identity, &model.first))
+        {
+            return Ok(shared);
+        }
+        let get: Device = unsafe { n.function("get_device") };
+        let raw = unsafe { get() };
+        let device = unsafe { IDirect3DDevice9::from_raw_borrowed(&raw) }
+            .ok_or(Error::Native("model device"))?;
+        let session = model.lease()?;
+        let mut renderer = unsafe { crate::mmd::render::Renderer::new(device, model.clone()) }
+            .map_err(|e| Error::Mmd(e.to_string()))?;
+        let first = session.frame().ok_or(Error::Native("model first pose"))?;
+        unsafe { renderer.draw(device, &first) }.map_err(|e| Error::Mmd(e.to_string()))?;
+        let texture = Arc::new(unsafe {
+            Texture::wrap(n, &renderer.target, model.first.width, model.first.height)
+        }?);
+        let shared = Arc::new(Self {
+            identity: model.first.clone(),
+            dynamic: true,
+            texture,
+            playback: Mutex::new(Asset::Image(model.first.clone()).play()),
+            failed: AtomicBool::new(false),
+            revision: AtomicU64::new(renderer.serial),
+            model: Some(Mutex::new(ModelGpu {
+                renderer,
+                session,
+                straight: None,
+            })),
+            model_placement: Some([
+                model.settings.display_scale,
+                model.settings.position_x,
+                model.settings.position_y,
+            ]),
+            model_keep_hud_clear: model.settings.keep_hud_clear,
+        });
+        cache.push(Arc::downgrade(&shared));
+        Ok(shared)
+    }
+
+    unsafe fn straight_model_texture(&self, n: &Native) -> Result<Arc<Texture>> {
+        let mut model = self
+            .model
+            .as_ref()
+            .ok_or(Error::Native("not a model"))?
+            .try_lock()
+            .map_err(|_| Error::Native("model busy"))?;
+        let get: Device = unsafe { n.function("get_device") };
+        let raw = unsafe { get() };
+        let device = unsafe { IDirect3DDevice9::from_raw_borrowed(&raw) }
+            .ok_or(Error::Native("model device"))?;
+        let target =
+            unsafe { model.renderer.straight(device) }.map_err(|e| Error::Mmd(e.to_string()))?;
+        if model.straight.is_none() {
+            model.straight = Some(Arc::new(unsafe {
+                Texture::wrap(n, &target, self.identity.width, self.identity.height)
+            }?));
+        }
+        Ok(model.straight.as_ref().unwrap().clone())
+    }
+}
+
+pub(super) fn character_changed() {
+    artwork::changed();
 }
 
 impl Sprite {
@@ -1272,6 +1392,7 @@ struct Surfaces {
     covers: Vec<Cover>,
     graphs: Vec<Graph>,
     frame_chara: FrameChara,
+    qpro: qpro::Replacement,
     backdrop: SelectBackdrop,
     premium_area: PremiumArea,
     concentration: Concentration,
@@ -1300,6 +1421,7 @@ impl Surfaces {
                 attempted: false,
                 placed: None,
             },
+            qpro: qpro::Replacement::new(),
             premium_area: PremiumArea {
                 object: 0,
                 base: 0,
@@ -1337,6 +1459,9 @@ impl Surfaces {
             self.concentration.visible = false;
             self.concentration.image = None;
             self.frame_chara = FrameChara::default();
+            self.qpro = qpro::Replacement::new();
+            super::reactions::leave();
+            artwork::changed();
             self.backdrop = SelectBackdrop::default();
             self.scene = 0;
             // Keep the selection texture: the next visit refreshes it in place
@@ -1350,11 +1475,13 @@ impl Surfaces {
     unsafe fn invalidate(&mut self) {
         if let Some(n) = NATIVE.get() {
             unsafe { self.frame_chara.restore(n, self.scene) };
+            unsafe { self.qpro.restore(n, self.scene) };
             unsafe { self.backdrop.restore(n, self.scene) };
             unsafe { self.premium_area.restore(n) };
             unsafe { self.concentration.release(n) };
         }
         self.frame_chara.sprite = None;
+        self.qpro = qpro::Replacement::new();
         self.frame_chara.attempted = false;
         self.select_texture = None;
         self.backdrop.sprite = None;
@@ -1377,12 +1504,22 @@ impl Surfaces {
 }
 
 pub(super) fn invalidate() {
+    super::reactions::leave();
     artwork::invalidate();
     if let Some(mut s) = state() {
         unsafe { s.invalidate() };
     } else {
         ENABLED.store(false, Ordering::Release);
         event(Event::Fault("surface invalidation reentry"));
+    }
+}
+
+fn tick_qpro() {
+    if let Some(n) = NATIVE.get()
+        && let Some(mut s) = state()
+    {
+        let scene = s.scene;
+        unsafe { s.qpro.update(n, scene) };
     }
 }
 
@@ -1443,6 +1580,7 @@ fn observe_select(this: usize) {
                 request_images();
                 fresh = this;
             }
+            unsafe { super::reactions::selection(n, this) };
             let choice = s.select_choice.clone();
             unsafe {
                 s.backdrop
@@ -1624,6 +1762,7 @@ fn restore_frame_chara(scene: usize) {
             && let Some(mut s) = state()
         {
             unsafe { s.frame_chara.restore(n, scene) };
+            unsafe { s.qpro.restore(n, scene) };
             unsafe { s.backdrop.restore(n, scene) };
         }
     });
@@ -2129,6 +2268,7 @@ unsafe extern "system" fn sprite_release(this: usize) {
     boundary(|| {
         if let Some(mut s) = state() {
             texture = s.frame_chara.released(this);
+            s.qpro.released(this);
             if s.backdrop.hidden.is_some_and(|saved| saved.layer == this) {
                 s.backdrop.hidden = None;
             }
